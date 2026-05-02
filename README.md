@@ -26,5 +26,5 @@ For Portal OAuth, run Pi and use:
 - `NOUS_API_KEY`: direct inference API key.
 - `NOUS_PORTAL_BASE_URL`: defaults to `https://portal.nousresearch.com`.
 - `NOUS_INFERENCE_BASE_URL`: defaults to `https://inference-api.nousresearch.com/v1`.
-- `NOUS_CLIENT_ID`: defaults to `hermes-cli`.
+- `NOUS_CLIENT_ID`: defaults to `pi`.
 - `NOUS_MIN_KEY_TTL_SECONDS`: defaults to `1800`.

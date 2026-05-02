@@ -84,7 +84,7 @@ test("device-code login handles pending, slow-down, success, agent-key mint, and
 			now: () => now,
 			portalBaseUrl: "https://portal.example",
 			inferenceBaseUrl: "https://default-inference.example/v1",
-			clientId: "hermes-cli",
+			clientId: "pi",
 		},
 	);
 
@@ -99,7 +99,7 @@ test("device-code login handles pending, slow-down, success, agent-key mint, and
 	assert.equal(credentials.inferenceBaseUrl, "https://inference.example/v1");
 	assert.equal(credentials.modelCatalog[0].id, "live-model");
 	assert.equal(calls[0].url, "https://portal.example/api/oauth/device/code");
-	assert.match(calls[0].body, /client_id=hermes-cli/);
+	assert.match(calls[0].body, /client_id=pi/);
 	assert.match(calls[0].body, /scope=inference%3Amint_agent_key/);
 	assert.equal(calls[4].init.headers.Authorization, "Bearer portal-access");
 	assert.equal(calls[5].url, "https://inference.example/v1/models");
@@ -175,7 +175,7 @@ test("refresh rotates portal refresh tokens, mints an agent key, stores skewed e
 			portalAccessExpires: now - 1,
 			portalBaseUrl: "https://portal.example",
 			inferenceBaseUrl: "https://old-inference.example/v1",
-			clientId: "hermes-cli",
+			clientId: "pi",
 		},
 		{ fetchFn, now: () => now },
 	);
@@ -202,7 +202,7 @@ test("refresh reuses a still-valid agent key", async () => {
 		portalAccessExpires: now + 3600 * 1000,
 		portalBaseUrl: "https://portal.example",
 		inferenceBaseUrl: "https://inference.example/v1",
-		clientId: "hermes-cli",
+		clientId: "pi",
 	};
 
 	const refreshed = await refreshNousPortalCredentials(credentials, { fetchFn, now: () => now });
@@ -228,7 +228,7 @@ test("refresh retries mint after invalid portal access by refreshing the portal 
 			portalAccessExpires: now + 3600 * 1000,
 			portalBaseUrl: "https://portal.example",
 			inferenceBaseUrl: "https://inference.example/v1",
-			clientId: "hermes-cli",
+			clientId: "pi",
 		},
 		{ fetchFn, now: () => now },
 	);
