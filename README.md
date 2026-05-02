@@ -28,3 +28,9 @@ For Portal OAuth, run Pi and use:
 - `NOUS_INFERENCE_BASE_URL`: defaults to `https://inference-api.nousresearch.com/v1`.
 - `NOUS_CLIENT_ID`: defaults to `pi`.
 - `NOUS_MIN_KEY_TTL_SECONDS`: defaults to `1800`.
+
+## Models
+
+Nous Portal `/models` is the model allowlist. Matching OpenRouter `/models`
+entries enrich that allowlist with context, pricing, image input, and reasoning
+metadata. See [docs/models.md](docs/models.md).

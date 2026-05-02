@@ -3,7 +3,9 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 export const PROVIDER_ID = "nous-portal";
 export const PROVIDER_NAME = "Nous Research Portal";
 export const DEFAULT_INFERENCE_BASE_URL = "https://inference-api.nousresearch.com/v1";
+export const DEFAULT_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 3000;
+export const DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS = 3000;
 export const DEFAULT_CONTEXT_WINDOW = 128000;
 export const DEFAULT_MAX_TOKENS = 4096;
 
@@ -27,26 +29,42 @@ export type NousProviderModelConfig = {
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
-type RawCatalogModel =
+export type RawCatalogModel =
 	| string
 	| {
 			id?: unknown;
 			name?: unknown;
+			reasoning?: unknown;
 			context_window?: unknown;
 			contextWindow?: unknown;
 			context_length?: unknown;
 			contextLength?: unknown;
+			context_length_tokens?: unknown;
 			max_tokens?: unknown;
 			maxTokens?: unknown;
 			max_output_tokens?: unknown;
 			maxOutputTokens?: unknown;
+			max_completion_tokens?: unknown;
+			supported_parameters?: unknown;
 			input?: unknown;
 			inputs?: unknown;
 			modalities?: unknown;
 			input_modalities?: unknown;
+			architecture?: unknown;
+			top_provider?: unknown;
+			pricing?: unknown;
 	  };
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const PRICE_PER_TOKEN_TO_MTOK = 1_000_000;
+
+const OPENROUTER_REASONING_EFFORT_MAP = {
+	minimal: "minimal",
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "xhigh",
+};
 
 export const OPENAI_COMPAT: NonNullable<NousProviderModelConfig["compat"]> = {
 	supportsStore: false,
@@ -54,6 +72,13 @@ export const OPENAI_COMPAT: NonNullable<NousProviderModelConfig["compat"]> = {
 	supportsReasoningEffort: false,
 	supportsUsageInStreaming: false,
 	maxTokensField: "max_tokens",
+};
+
+export const OPENROUTER_REASONING_COMPAT: NonNullable<NousProviderModelConfig["compat"]> = {
+	...OPENAI_COMPAT,
+	supportsReasoningEffort: false,
+	thinkingFormat: "openrouter",
+	reasoningEffortMap: { ...OPENROUTER_REASONING_EFFORT_MAP },
 };
 
 export const FALLBACK_MODEL_IDS = [
@@ -107,21 +132,115 @@ function coercePositiveInteger(value: unknown): number | undefined {
 	return undefined;
 }
 
-function arrayHasImage(value: unknown): boolean {
-	return Array.isArray(value) && value.some((item) => typeof item === "string" && item.toLowerCase() === "image");
+function coercePricePerMillionTokens(value: unknown): number {
+	if (typeof value === "number" && Number.isFinite(value)) return value * PRICE_PER_TOKEN_TO_MTOK;
+	if (typeof value === "string" && value.trim()) {
+		const parsed = Number(value);
+		if (Number.isFinite(parsed)) return parsed * PRICE_PER_TOKEN_TO_MTOK;
+	}
+	return 0;
 }
 
-function inferInputs(raw: RawCatalogModel): ("text" | "image")[] {
-	if (typeof raw === "string") return ["text"];
+function asRecord(value: unknown): Record<string, unknown> {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function asStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string").map((item) => item.toLowerCase())
+		: [];
+}
+
+function getTopProvider(raw: RawCatalogModel): Record<string, unknown> {
+	return typeof raw === "string" ? {} : asRecord(raw.top_provider);
+}
+
+function getArchitecture(raw: RawCatalogModel): Record<string, unknown> {
+	return typeof raw === "string" ? {} : asRecord(raw.architecture);
+}
+
+function getPricing(raw: RawCatalogModel): Record<string, unknown> {
+	return typeof raw === "string" ? {} : asRecord(raw.pricing);
+}
+
+function explicitInputModalities(raw: RawCatalogModel): string[] | undefined {
+	if (typeof raw === "string") return undefined;
+
+	const candidates = [
+		raw.input,
+		raw.inputs,
+		raw.input_modalities,
+		getArchitecture(raw).input_modalities,
+	];
+	for (const value of candidates) {
+		const modalities = asStringArray(value);
+		if (modalities.length > 0) return modalities;
+	}
+
+	const modalities = raw.modalities;
+	if (Array.isArray(modalities)) return asStringArray(modalities);
+	const modalityInput = asRecord(modalities).input;
+	const modalityInputValues = asStringArray(modalityInput);
+	return modalityInputValues.length > 0 ? modalityInputValues : undefined;
+}
+
+function inferStaticInputs(id: string): ("text" | "image")[] {
+	const lower = id.toLowerCase();
 	if (
-		arrayHasImage(raw.input) ||
-		arrayHasImage(raw.inputs) ||
-		arrayHasImage(raw.modalities) ||
-		arrayHasImage(raw.input_modalities)
+		lower.startsWith("anthropic/claude-") ||
+		lower.startsWith("google/gemini-") ||
+		lower.startsWith("x-ai/grok-") ||
+		lower === "moonshotai/kimi-k2.6" ||
+		lower.includes("glm-5v") ||
+		lower.startsWith("qwen/qwen3.5-")
 	) {
 		return ["text", "image"];
 	}
 	return ["text"];
+}
+
+function inferInputs(raw: RawCatalogModel, id: string): ("text" | "image")[] {
+	const modalities = explicitInputModalities(raw);
+	if (modalities) {
+		return modalities.includes("image") ? ["text", "image"] : ["text"];
+	}
+	return inferStaticInputs(id);
+}
+
+function supportedParameters(raw: RawCatalogModel): string[] {
+	return typeof raw === "string" ? [] : asStringArray(raw.supported_parameters);
+}
+
+function inferStaticReasoning(id: string): boolean {
+	const lower = id.toLowerCase();
+	return (
+		lower.includes("thinking") ||
+		lower.includes("reasoning") ||
+		lower.includes("reasoner") ||
+		lower.startsWith("anthropic/claude-opus-4") ||
+		lower.startsWith("anthropic/claude-sonnet-4") ||
+		lower.startsWith("anthropic/claude-haiku-4") ||
+		lower.startsWith("moonshotai/kimi-k2") ||
+		lower.startsWith("openai/gpt-5") ||
+		lower.startsWith("google/gemini-2.5") ||
+		lower.startsWith("google/gemini-3") ||
+		lower.startsWith("qwen/qwen3") ||
+		lower.startsWith("xiaomi/mimo-") ||
+		lower.startsWith("x-ai/") ||
+		lower.startsWith("deepseek/") ||
+		lower.startsWith("z-ai/glm-5") ||
+		lower.startsWith("nvidia/nemotron-3") ||
+		lower === "tencent/hy3-preview"
+	);
+}
+
+function inferReasoning(raw: RawCatalogModel, id: string): boolean {
+	if (typeof raw !== "string") {
+		const params = supportedParameters(raw);
+		if (params.length > 0) return params.includes("reasoning") || params.includes("include_reasoning");
+		if (typeof raw.reasoning === "boolean") return raw.reasoning;
+	}
+	return inferStaticReasoning(id);
 }
 
 function rawModelId(raw: RawCatalogModel): string | undefined {
@@ -134,37 +253,65 @@ function rawModelName(raw: RawCatalogModel, id: string): string {
 	return id;
 }
 
+function rawContextWindow(raw: RawCatalogModel): number {
+	if (typeof raw === "string") return DEFAULT_CONTEXT_WINDOW;
+	const topProvider = getTopProvider(raw);
+	return (
+		coercePositiveInteger(topProvider.context_length) ??
+		coercePositiveInteger(raw.context_window) ??
+		coercePositiveInteger(raw.contextWindow) ??
+		coercePositiveInteger(raw.context_length) ??
+		coercePositiveInteger(raw.contextLength) ??
+		coercePositiveInteger(raw.context_length_tokens) ??
+		DEFAULT_CONTEXT_WINDOW
+	);
+}
+
+function rawMaxTokens(raw: RawCatalogModel): number {
+	if (typeof raw === "string") return DEFAULT_MAX_TOKENS;
+	const topProvider = getTopProvider(raw);
+	return (
+		coercePositiveInteger(topProvider.max_completion_tokens) ??
+		coercePositiveInteger(raw.max_completion_tokens) ??
+		coercePositiveInteger(raw.max_tokens) ??
+		coercePositiveInteger(raw.maxTokens) ??
+		coercePositiveInteger(raw.max_output_tokens) ??
+		coercePositiveInteger(raw.maxOutputTokens) ??
+		DEFAULT_MAX_TOKENS
+	);
+}
+
+function rawCost(raw: RawCatalogModel): NousProviderModelConfig["cost"] {
+	const pricing = getPricing(raw);
+	if (Object.keys(pricing).length === 0) return { ...ZERO_COST };
+	return {
+		input: coercePricePerMillionTokens(pricing.prompt),
+		output: coercePricePerMillionTokens(pricing.completion),
+		cacheRead: coercePricePerMillionTokens(pricing.input_cache_read),
+		cacheWrite: coercePricePerMillionTokens(pricing.input_cache_write),
+	};
+}
+
+function modelCompat(reasoning: boolean): NonNullable<NousProviderModelConfig["compat"]> {
+	return reasoning ? { ...OPENROUTER_REASONING_COMPAT } : { ...OPENAI_COMPAT };
+}
+
 export function toNousModelConfig(raw: RawCatalogModel, baseUrl: string): NousProviderModelConfig | undefined {
 	const id = rawModelId(raw);
 	if (!id) return undefined;
-	const contextWindow =
-		typeof raw === "string"
-			? DEFAULT_CONTEXT_WINDOW
-			: (coercePositiveInteger(raw.context_window) ??
-				coercePositiveInteger(raw.contextWindow) ??
-				coercePositiveInteger(raw.context_length) ??
-				coercePositiveInteger(raw.contextLength) ??
-				DEFAULT_CONTEXT_WINDOW);
-	const maxTokens =
-		typeof raw === "string"
-			? DEFAULT_MAX_TOKENS
-			: (coercePositiveInteger(raw.max_tokens) ??
-				coercePositiveInteger(raw.maxTokens) ??
-				coercePositiveInteger(raw.max_output_tokens) ??
-				coercePositiveInteger(raw.maxOutputTokens) ??
-				DEFAULT_MAX_TOKENS);
+	const reasoning = inferReasoning(raw, id);
 
 	return {
 		id,
 		name: rawModelName(raw, id),
 		api: "openai-completions",
 		baseUrl: normalizeBaseUrl(baseUrl),
-		reasoning: false,
-		input: inferInputs(raw),
-		cost: { ...ZERO_COST },
-		contextWindow,
-		maxTokens,
-		compat: { ...OPENAI_COMPAT },
+		reasoning,
+		input: inferInputs(raw, id),
+		cost: rawCost(raw),
+		contextWindow: rawContextWindow(raw),
+		maxTokens: rawMaxTokens(raw),
+		compat: modelCompat(reasoning),
 	};
 }
 
@@ -190,6 +337,39 @@ export function buildFallbackModels(baseUrl = DEFAULT_INFERENCE_BASE_URL): NousP
 	);
 }
 
+export function parseOpenRouterModelMetadata(payload: unknown): Map<string, RawCatalogModel> {
+	const data =
+		typeof payload === "object" && payload !== null && Array.isArray((payload as { data?: unknown }).data)
+			? ((payload as { data: RawCatalogModel[] }).data as RawCatalogModel[])
+			: [];
+	const metadata = new Map<string, RawCatalogModel>();
+	for (const raw of data) {
+		const id = rawModelId(raw);
+		if (id && !metadata.has(id)) metadata.set(id, raw);
+	}
+	return metadata;
+}
+
+export function applyOpenRouterMetadata(
+	models: NousProviderModelConfig[],
+	metadata: Map<string, RawCatalogModel>,
+): NousProviderModelConfig[] {
+	return models.map((model) => {
+		const raw = metadata.get(model.id);
+		if (!raw) return model;
+		const enriched = toNousModelConfig({ ...asRecord(raw), id: model.id }, model.baseUrl ?? DEFAULT_INFERENCE_BASE_URL);
+		if (!enriched) return model;
+		return {
+			...model,
+			...enriched,
+			id: model.id,
+			api: "openai-completions",
+			baseUrl: model.baseUrl,
+			compat: { ...OPENAI_COMPAT, ...(enriched.compat ?? {}) },
+		};
+	});
+}
+
 function createTimeoutSignal(timeoutMs: number, parent?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
 	const controller = new AbortController();
 	let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -212,6 +392,8 @@ export async function fetchModelCatalog(
 	options: {
 		fetchFn?: FetchLike;
 		timeoutMs?: number;
+		openRouterMetadataTimeoutMs?: number;
+		openRouterModelsUrl?: string;
 		signal?: AbortSignal;
 	} = {},
 ): Promise<NousProviderModelConfig[]> {
@@ -232,9 +414,60 @@ export async function fetchModelCatalog(
 			const text = await response.text().catch(() => "");
 			throw new Error(`/models request failed with status ${response.status}${text ? `: ${text}` : ""}`);
 		}
-		return parseModelCatalog(await response.json(), normalizedBaseUrl);
+		const models = parseModelCatalog(await response.json(), normalizedBaseUrl);
+		return enrichModelsWithOpenRouterMetadata(models, {
+			fetchFn,
+			openRouterModelsUrl: options.openRouterModelsUrl,
+			timeoutMs: options.openRouterMetadataTimeoutMs ?? DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS,
+			signal: options.signal,
+		});
 	} finally {
 		cleanup();
+	}
+}
+
+export async function fetchOpenRouterModelMetadata(
+	options: {
+		fetchFn?: FetchLike;
+		openRouterModelsUrl?: string;
+		timeoutMs?: number;
+		signal?: AbortSignal;
+	} = {},
+): Promise<Map<string, RawCatalogModel>> {
+	const fetchFn = options.fetchFn ?? fetch;
+	const modelsUrl = normalizeBaseUrl(options.openRouterModelsUrl, DEFAULT_OPENROUTER_MODELS_URL);
+	const { signal, cleanup } = createTimeoutSignal(
+		options.timeoutMs ?? DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS,
+		options.signal,
+	);
+	try {
+		const response = await fetchFn(modelsUrl, {
+			method: "GET",
+			headers: { Accept: "application/json" },
+			signal,
+		});
+		if (!response.ok) throw new Error(`OpenRouter /models request failed with status ${response.status}`);
+		return parseOpenRouterModelMetadata(await response.json());
+	} finally {
+		cleanup();
+	}
+}
+
+export async function enrichModelsWithOpenRouterMetadata(
+	models: NousProviderModelConfig[],
+	options: {
+		fetchFn?: FetchLike;
+		openRouterModelsUrl?: string;
+		timeoutMs?: number;
+		signal?: AbortSignal;
+	} = {},
+): Promise<NousProviderModelConfig[]> {
+	if (models.length === 0) return models;
+	try {
+		const metadata = await fetchOpenRouterModelMetadata(options);
+		return applyOpenRouterMetadata(models, metadata);
+	} catch {
+		return models;
 	}
 }
 
