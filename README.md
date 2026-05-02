@@ -1,11 +1,11 @@
-# pi-nous-portal-provider
+# @jayteelabs/pi-nous-portal-provider
 
 Pi package that registers the `nous-portal` provider for Nous Research Portal.
 
 ## Install
 
 ```sh
-pi install npm:pi-nous-portal-provider
+pi install npm:@jayteelabs/pi-nous-portal-provider
 ```
 
 ## Usage

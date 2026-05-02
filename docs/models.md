@@ -1,6 +1,6 @@
 # Model Catalog
 
-`pi-nous-portal-provider` treats Nous Portal as the authority for model availability and uses OpenRouter only as best-effort metadata.
+`@jayteelabs/pi-nous-portal-provider` treats Nous Portal as the authority for model availability and uses OpenRouter only as best-effort metadata.
 
 ## Sources
 

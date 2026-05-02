@@ -1,5 +1,5 @@
 {
-  "name": "pi-nous-portal-provider",
+  "name": "@jayteelabs/pi-nous-portal-provider",
   "version": "0.1.0",
   "description": "Pi provider package for Nous Research Portal inference.",
   "type": "module",
