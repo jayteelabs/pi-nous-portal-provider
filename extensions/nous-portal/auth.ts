@@ -7,7 +7,7 @@ import {
 } from "./models.ts";
 
 export const DEFAULT_PORTAL_BASE_URL = "https://portal.nousresearch.com";
-export const DEFAULT_CLIENT_ID = "pi";
+export const DEFAULT_CLIENT_ID = "hermes-cli";
 export const DEFAULT_SCOPE = "inference:mint_agent_key";
 export const DEFAULT_MIN_KEY_TTL_SECONDS = 1800;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
