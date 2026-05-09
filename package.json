@@ -1,33 +1,40 @@
 {
-  "name": "@jayteelabs/pi-nous-portal-provider",
-  "version": "0.1.0",
-  "description": "Pi provider package for Nous Research Portal inference.",
-  "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
-  "scripts": {
-    "test": "node --test tests/*.test.mjs"
-  },
-  "keywords": [
-    "pi-package",
-    "pi-extension",
-    "pi",
-    "nous"
-  ],
-  "license": "MIT",
-  "files": [
-    "extensions",
-    "README.md",
-    "docs"
-  ],
-  "pi": {
-    "extensions": [
-      "./extensions/nous-portal/index.ts"
-    ]
-  },
-  "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*"
-  }
+	"name": "@jayteelabs/pi-nous-portal-provider",
+	"version": "0.1.0",
+	"description": "Pi provider package for Nous Research Portal inference.",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"test": "node --test tests/*.test.mjs"
+	},
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi-provider",
+		"pi-coding-agent",
+		"pi-mono",
+		"ai-provider",
+		"llm",
+		"llm-provider",
+		"pi",
+		"nous"
+	],
+	"license": "MIT",
+	"files": [
+		"extensions",
+		"docs",
+		"package.json",
+		"README.md"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/nous-portal/index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-ai": "*",
+		"@mariozechner/pi-coding-agent": "*"
+	}
 }
