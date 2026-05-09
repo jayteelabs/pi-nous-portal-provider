@@ -3,8 +3,10 @@ import test from "node:test";
 
 import { applyStoredModelCatalog } from "../extensions/nous-portal/models.ts";
 import {
+	DEFAULT_CLIENT_ID,
 	KEY_EXPIRY_SKEW_MS,
 	TOKEN_EXPIRY_SKEW_MS,
+	getClientId,
 	getNousPortalApiKey,
 	loginNousPortal,
 	refreshNousPortalCredentials,
@@ -40,6 +42,21 @@ function deviceCodeResponse(overrides = {}) {
 		...overrides,
 	};
 }
+
+test("default OAuth client id uses Hermes client and honors NOUS_CLIENT_ID override", () => {
+	const previous = process.env.NOUS_CLIENT_ID;
+	try {
+		delete process.env.NOUS_CLIENT_ID;
+		assert.equal(DEFAULT_CLIENT_ID, "hermes-cli");
+		assert.equal(getClientId(), "hermes-cli");
+
+		process.env.NOUS_CLIENT_ID = "pi";
+		assert.equal(getClientId(), "pi");
+	} finally {
+		if (previous === undefined) delete process.env.NOUS_CLIENT_ID;
+		else process.env.NOUS_CLIENT_ID = previous;
+	}
+});
 
 test("device-code login handles pending, slow-down, success, agent-key mint, and model cache", async () => {
 	const now = Date.parse("2026-01-01T00:00:00.000Z");

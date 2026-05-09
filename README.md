@@ -1,11 +1,11 @@
-# pi-nous-portal-provider
+# @jayteelabs/pi-nous-portal-provider
 
 Pi package that registers the `nous-portal` provider for Nous Research Portal.
 
 ## Install
 
 ```sh
-pi install npm:pi-nous-portal-provider
+pi install npm:@jayteelabs/pi-nous-portal-provider
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ For Portal OAuth, run Pi and use:
 - `NOUS_API_KEY`: direct inference API key.
 - `NOUS_PORTAL_BASE_URL`: defaults to `https://portal.nousresearch.com`.
 - `NOUS_INFERENCE_BASE_URL`: defaults to `https://inference-api.nousresearch.com/v1`.
-- `NOUS_CLIENT_ID`: defaults to `pi`.
+- `NOUS_CLIENT_ID`: defaults to `hermes-cli`.
 - `NOUS_MIN_KEY_TTL_SECONDS`: defaults to `1800`.
 
 ## Models
