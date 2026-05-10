@@ -43,3 +43,9 @@ metadata. The static fallback catalog is only registered after Pi has usable
 Nous credentials and live model discovery is unavailable; unauthenticated,
 expired, or invalid credentials keep the provider model list blank. See
 [docs/models.md](docs/models.md).
+
+## Testing
+
+Run the offline unit tests with `npm test`. Live provider compatibility checks
+are isolated behind `npm run test:compat` and skip unless the required Nous
+model/API-key environment variables are set. See [docs/testing.md](docs/testing.md).

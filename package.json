@@ -7,7 +7,8 @@
 		"node": ">=22"
 	},
 	"scripts": {
-		"test": "node --test tests/*.test.mjs"
+		"test": "node --test tests/*.test.mjs",
+		"test:compat": "node --test tests/compat/*.test.mjs"
 	},
 	"keywords": [
 		"pi-package",
