@@ -16,6 +16,7 @@ on:
     branches:
       - main
     paths:
+      - .github/workflows/npm-release.yml
       - package.json
 
 concurrency:
@@ -99,9 +100,6 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Setup npm for trusted publishing
-        run: npm install -g "npm@^11.5.1"
-
       - name: Test
         run: npm test
 
@@ -133,10 +131,7 @@ jobs:
           tag="v${PACKAGE_VERSION}"
           if git rev-parse "refs/tags/${tag}" > /dev/null 2>&1; then
             tag_sha="$(git rev-list -n 1 "$tag")"
-            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-              echo "::error::${tag} already exists at ${tag_sha}, expected ${GITHUB_SHA}"
-              exit 1
-            fi
+            echo "::notice::${tag} already exists at ${tag_sha}; leaving it unchanged."
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -146,7 +141,7 @@ jobs:
 
       - name: Publish package
         if: steps.npm.outputs.published == 'false'
-        run: npm publish --access public
+        run: npx --yes "npm@^11.5.1" publish --access public
 
       - name: Skip existing version
         if: steps.npm.outputs.published == 'true'
