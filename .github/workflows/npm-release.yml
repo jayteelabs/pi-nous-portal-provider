@@ -90,14 +90,16 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Test
         run: npm test
@@ -122,14 +124,6 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify trusted publishing environment
-        if: steps.npm.outputs.published == 'false'
-        run: |
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
-            echo "::error::GitHub OIDC environment is unavailable. Check that this job has id-token: write permission and uses a GitHub-hosted runner."
-            exit 1
-          fi
-
       - name: Create release tag
         if: steps.npm.outputs.published == 'false'
         env:
@@ -148,9 +142,7 @@ jobs:
 
       - name: Publish package
         if: steps.npm.outputs.published == 'false'
-        run: |
-          unset NODE_AUTH_TOKEN NPM_CONFIG_USERCONFIG NPM_CONFIG_ALWAYS_AUTH
-          npx --yes "npm@^11.5.1" publish --access public --registry https://registry.npmjs.org
+        run: npm publish --access public
 
       - name: Skip existing version
         if: steps.npm.outputs.published == 'true'
