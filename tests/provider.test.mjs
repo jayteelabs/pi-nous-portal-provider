@@ -39,7 +39,7 @@ async function withEnv(env, fn) {
 	}
 }
 
-test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and fallback models", async () => {
+test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and blank models without auth", async () => {
 	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
 		const { pi, registrations } = capturePi();
 		await nousPortalProvider(pi);
@@ -50,8 +50,7 @@ test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and fal
 		assert.equal(config.baseUrl, "https://inference-api.nousresearch.com/v1");
 		assert.equal(config.apiKey, "NOUS_API_KEY");
 		assert.equal(config.api, "openai-completions");
-		assert.ok(config.models.length > 0);
-		assert.equal(config.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
+		assert.deepEqual(config.models, []);
 		assert.equal(config.oauth.name, PROVIDER_NAME);
 		assert.equal(typeof config.oauth.login, "function");
 		assert.equal(typeof config.oauth.refreshToken, "function");
@@ -91,7 +90,21 @@ test("startup model discovery uses NOUS_API_KEY and live /models when available"
 	}
 });
 
-test("startup model discovery fails closed to fallback models", async () => {
+test("startup model discovery stays blank when Nous returns an empty allowlist", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async () => jsonResponse({ data: [] });
+	try {
+		await withEnv({ NOUS_API_KEY: "sk-nous" }, async () => {
+			const { pi, registrations } = capturePi();
+			await nousPortalProvider(pi);
+			assert.deepEqual(registrations[0].config.models, []);
+		});
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+});
+
+test("startup model discovery falls back to static models when authenticated discovery is unavailable", async () => {
 	const previousFetch = globalThis.fetch;
 	globalThis.fetch = async () => jsonResponse({ error: "nope" }, { status: 500 });
 	try {
@@ -101,6 +114,20 @@ test("startup model discovery fails closed to fallback models", async () => {
 			const config = registrations[0].config;
 			assert.ok(config.models.length > 5);
 			assert.notEqual(config.models[0].id, "live-a");
+		});
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+});
+
+test("startup model discovery stays blank when direct API key auth fails", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async () => jsonResponse({ error: "invalid_api_key" }, { status: 401 });
+	try {
+		await withEnv({ NOUS_API_KEY: "bad-key" }, async () => {
+			const { pi, registrations } = capturePi();
+			await nousPortalProvider(pi);
+			assert.deepEqual(registrations[0].config.models, []);
 		});
 	} finally {
 		globalThis.fetch = previousFetch;

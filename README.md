@@ -33,4 +33,7 @@ For Portal OAuth, run Pi and use:
 
 Nous Portal `/models` is the model allowlist. Matching OpenRouter `/models`
 entries enrich that allowlist with context, pricing, image input, and reasoning
-metadata. See [docs/models.md](docs/models.md).
+metadata. The static fallback catalog is only registered after Pi has usable
+Nous credentials and live model discovery is unavailable; unauthenticated or
+invalid credentials keep the provider model list blank. See
+[docs/models.md](docs/models.md).
