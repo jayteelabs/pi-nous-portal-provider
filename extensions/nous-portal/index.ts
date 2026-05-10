@@ -7,6 +7,7 @@ import {
 	buildFallbackModels,
 	fetchModelCatalog,
 	getInferenceBaseUrl,
+	isModelCatalogAuthError,
 } from "./models.ts";
 import {
 	getNousPortalApiKey,
@@ -16,16 +17,15 @@ import {
 
 async function startupModels() {
 	const inferenceBaseUrl = getInferenceBaseUrl();
-	const fallback = buildFallbackModels(inferenceBaseUrl);
 	const apiKey = process.env.NOUS_API_KEY?.trim();
-	if (!apiKey) return fallback;
+	if (!apiKey) return [];
 	try {
-		const liveModels = await fetchModelCatalog(apiKey, inferenceBaseUrl, {
+		return await fetchModelCatalog(apiKey, inferenceBaseUrl, {
 			timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
 		});
-		return liveModels.length > 0 ? liveModels : fallback;
-	} catch {
-		return fallback;
+	} catch (error) {
+		if (isModelCatalogAuthError(error)) return [];
+		return buildFallbackModels(inferenceBaseUrl);
 	}
 }
 

@@ -76,6 +76,11 @@ type AgentKeyResponse = {
 	inference_base_url?: string;
 };
 
+type ModelCatalogRefreshResult = {
+	catalog?: NousProviderModelConfig[];
+	unavailable: boolean;
+};
+
 export type NousOAuthCredentials = OAuthCredentials & {
 	portalAccess?: string;
 	portalAccessExpires?: number;
@@ -91,6 +96,7 @@ export type NousOAuthCredentials = OAuthCredentials & {
 	agentKeyObtainedAt?: number;
 	modelCatalog?: NousProviderModelConfig[];
 	modelCatalogFetchedAt?: number;
+	modelCatalogUnavailable?: boolean;
 };
 
 class PortalHttpError extends Error {
@@ -401,16 +407,16 @@ async function refreshModelCatalog(
 	inferenceBaseUrl: string,
 	config: RuntimeConfig,
 	signal?: AbortSignal,
-): Promise<NousProviderModelConfig[] | undefined> {
+): Promise<ModelCatalogRefreshResult> {
 	try {
 		const catalog = await fetchModelCatalog(apiKey, inferenceBaseUrl, {
 			fetchFn: config.fetchFn,
 			timeoutMs: config.modelFetchTimeoutMs,
 			signal,
 		});
-		return catalog.length > 0 ? catalog : undefined;
+		return { catalog, unavailable: false };
 	} catch {
-		return undefined;
+		return { unavailable: true };
 	}
 }
 
@@ -418,7 +424,7 @@ function createCredentials(
 	config: RuntimeConfig,
 	token: TokenResponse,
 	mint: AgentKeyResponse,
-	modelCatalog?: NousProviderModelConfig[],
+	modelCatalogRefresh: ModelCatalogRefreshResult,
 ): NousOAuthCredentials {
 	const inferenceBaseUrl = normalizeBaseUrl(mint.inference_base_url ?? token.inference_base_url, config.inferenceBaseUrl);
 	return {
@@ -437,8 +443,9 @@ function createCredentials(
 		agentKeyExpiresIn: mint.expires_in,
 		agentKeyReused: mint.reused,
 		agentKeyObtainedAt: config.now(),
-		modelCatalog,
-		modelCatalogFetchedAt: modelCatalog ? config.now() : undefined,
+		modelCatalog: modelCatalogRefresh.catalog,
+		modelCatalogFetchedAt: modelCatalogRefresh.unavailable ? undefined : config.now(),
+		modelCatalogUnavailable: modelCatalogRefresh.unavailable,
 	};
 }
 
@@ -506,7 +513,7 @@ function mergeMintIntoCredentials(
 	credentials: NousOAuthCredentials,
 	config: RuntimeConfig,
 	mint: AgentKeyResponse,
-	modelCatalog?: NousProviderModelConfig[],
+	modelCatalogRefresh: ModelCatalogRefreshResult,
 ): NousOAuthCredentials {
 	return {
 		...credentials,
@@ -518,8 +525,9 @@ function mergeMintIntoCredentials(
 		agentKeyExpiresIn: mint.expires_in,
 		agentKeyReused: mint.reused,
 		agentKeyObtainedAt: config.now(),
-		modelCatalog: modelCatalog ?? credentials.modelCatalog,
-		modelCatalogFetchedAt: modelCatalog ? config.now() : credentials.modelCatalogFetchedAt,
+		modelCatalog: modelCatalogRefresh.unavailable ? credentials.modelCatalog : modelCatalogRefresh.catalog,
+		modelCatalogFetchedAt: modelCatalogRefresh.unavailable ? credentials.modelCatalogFetchedAt : config.now(),
+		modelCatalogUnavailable: modelCatalogRefresh.unavailable,
 	};
 }
 

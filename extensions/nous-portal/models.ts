@@ -29,6 +29,22 @@ export type NousProviderModelConfig = {
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+export class ModelCatalogHttpError extends Error {
+	readonly status: number;
+	readonly body: string;
+
+	constructor(status: number, body: string) {
+		super(`/models request failed with status ${status}${body ? `: ${body}` : ""}`);
+		this.name = "ModelCatalogHttpError";
+		this.status = status;
+		this.body = body;
+	}
+}
+
+export function isModelCatalogAuthError(error: unknown): boolean {
+	return error instanceof ModelCatalogHttpError && (error.status === 401 || error.status === 403);
+}
+
 export type RawCatalogModel =
 	| string
 	| {
@@ -412,7 +428,7 @@ export async function fetchModelCatalog(
 		});
 		if (!response.ok) {
 			const text = await response.text().catch(() => "");
-			throw new Error(`/models request failed with status ${response.status}${text ? `: ${text}` : ""}`);
+			throw new ModelCatalogHttpError(response.status, text);
 		}
 		const models = parseModelCatalog(await response.json(), normalizedBaseUrl);
 		return enrichModelsWithOpenRouterMetadata(models, {
@@ -490,15 +506,19 @@ export function coerceStoredCatalog(value: unknown): NousProviderModelConfig[] {
 	return value.filter(isProviderModelConfig);
 }
 
-export function applyStoredModelCatalog(models: Model<Api>[], credentials: { [key: string]: unknown }): Model<Api>[] {
-	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
-	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
-	if (storedCatalog.length === 0) {
-		return models.map((model) => (model.provider === PROVIDER_ID ? { ...model, baseUrl } : model));
-	}
+function credentialsHaveUsableAgentKey(credentials: { [key: string]: unknown }): boolean {
+	const access = typeof credentials.access === "string" && credentials.access.trim().length > 0;
+	const expires =
+		typeof credentials.expires === "number"
+			? credentials.expires
+			: typeof credentials.expires === "string" && credentials.expires.trim()
+				? Number(credentials.expires)
+				: NaN;
+	return access && Number.isFinite(expires) && expires > Date.now();
+}
 
-	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
-	const liveNousModels = storedCatalog.map(
+function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): Model<Api>[] {
+	return catalog.map(
 		(model) =>
 			({
 				...model,
@@ -508,5 +528,17 @@ export function applyStoredModelCatalog(models: Model<Api>[], credentials: { [ke
 				compat: { ...OPENAI_COMPAT, ...(model.compat ?? {}) },
 			}) as Model<Api>,
 	);
-	return [...nonNousModels, ...liveNousModels];
+}
+
+export function applyStoredModelCatalog(models: Model<Api>[], credentials: { [key: string]: unknown } = {}): Model<Api>[] {
+	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
+	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
+	if (!credentialsHaveUsableAgentKey(credentials)) return nonNousModels;
+
+	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
+	if (storedCatalog.length > 0) return [...nonNousModels, ...toProviderModels(storedCatalog, baseUrl)];
+
+	if (credentials.modelCatalogUnavailable === true) return [...nonNousModels, ...toProviderModels(buildFallbackModels(baseUrl), baseUrl)];
+
+	return nonNousModels;
 }

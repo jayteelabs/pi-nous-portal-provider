@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyStoredModelCatalog } from "../extensions/nous-portal/models.ts";
+import { PROVIDER_ID, applyStoredModelCatalog } from "../extensions/nous-portal/models.ts";
 import {
 	DEFAULT_CLIENT_ID,
 	KEY_EXPIRY_SKEW_MS,
@@ -115,11 +115,44 @@ test("device-code login handles pending, slow-down, success, agent-key mint, and
 	assert.equal(credentials.portalAccessExpires, now + 3600 * 1000 - TOKEN_EXPIRY_SKEW_MS);
 	assert.equal(credentials.inferenceBaseUrl, "https://inference.example/v1");
 	assert.equal(credentials.modelCatalog[0].id, "live-model");
+	assert.equal(credentials.modelCatalogFetchedAt, now);
+	assert.equal(credentials.modelCatalogUnavailable, false);
 	assert.equal(calls[0].url, "https://portal.example/api/oauth/device/code");
 	assert.match(calls[0].body, /client_id=pi/);
 	assert.match(calls[0].body, /scope=inference%3Amint_agent_key/);
 	assert.equal(calls[4].init.headers.Authorization, "Bearer portal-access");
 	assert.equal(calls[5].url, "https://inference.example/v1/models");
+});
+
+test("device-code login marks the model catalog unavailable when discovery fails", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const { fetchFn } = createFetchMock([
+		{ body: deviceCodeResponse() },
+		{
+			body: {
+				access_token: "portal-access",
+				refresh_token: "portal-refresh",
+				expires_in: 3600,
+			},
+		},
+		{ body: { api_key: "agent-key", expires_in: 3600 } },
+		{ status: 503, body: { error: "unavailable" } },
+	]);
+
+	const credentials = await loginNousPortal(
+		{ onAuth: () => {}, onPrompt: async () => "" },
+		{
+			fetchFn,
+			sleepFn: async () => {},
+			now: () => now,
+			portalBaseUrl: "https://portal.example",
+		},
+	);
+
+	assert.equal(credentials.access, "agent-key");
+	assert.equal(credentials.modelCatalog, undefined);
+	assert.equal(credentials.modelCatalogFetchedAt, undefined);
+	assert.equal(credentials.modelCatalogUnavailable, true);
 });
 
 test("device-code login reports denied authorization", async () => {
@@ -203,6 +236,7 @@ test("refresh rotates portal refresh tokens, mints an agent key, stores skewed e
 	assert.equal(refreshed.expires, now + 3600 * 1000 - KEY_EXPIRY_SKEW_MS);
 	assert.equal(refreshed.inferenceBaseUrl, "https://mint-inference.example/v1");
 	assert.equal(refreshed.modelCatalog[0].id, "oauth-live");
+	assert.equal(refreshed.modelCatalogUnavailable, false);
 	assert.match(calls[0].body, /refresh_token=old-refresh/);
 	assert.equal(calls[1].init.headers.Authorization, "Bearer new-portal-access");
 	assert.equal(calls[2].url, "https://mint-inference.example/v1/models");
@@ -253,6 +287,8 @@ test("refresh retries mint after invalid portal access by refreshing the portal 
 	assert.equal(refreshed.refresh, "rotated-refresh");
 	assert.equal(refreshed.portalAccess, "refreshed-access");
 	assert.equal(refreshed.access, "agent-after-retry");
+	assert.deepEqual(refreshed.modelCatalog, []);
+	assert.equal(refreshed.modelCatalogUnavailable, false);
 	assert.equal(calls[0].url, "https://portal.example/api/oauth/agent-key");
 	assert.match(calls[1].body, /grant_type=refresh_token/);
 	assert.equal(calls[2].init.headers.Authorization, "Bearer refreshed-access");
@@ -268,6 +304,8 @@ test("modifyModels replaces fallback nous-portal catalog and preserves other pro
 		{ provider: "nous-portal", id: "fallback", baseUrl: "https://fallback.example/v1", api: "openai-completions" },
 	];
 	const modified = applyStoredModelCatalog(models, {
+		access: "agent-key",
+		expires: Date.now() + 60_000,
 		inferenceBaseUrl: "https://oauth-inference.example/v1",
 		modelCatalog: [
 			{
@@ -286,7 +324,54 @@ test("modifyModels replaces fallback nous-portal catalog and preserves other pro
 
 	assert.equal(modified.length, 2);
 	assert.equal(modified[0].provider, "openai");
-	assert.equal(modified[1].provider, "nous-portal");
+	assert.equal(modified[1].provider, PROVIDER_ID);
 	assert.equal(modified[1].id, "oauth-live");
 	assert.equal(modified[1].baseUrl, "https://oauth-inference.example/v1");
+});
+
+test("modifyModels removes nous-portal models when OAuth credentials are missing or expired", () => {
+	const models = [
+		{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" },
+		{ provider: PROVIDER_ID, id: "fallback", baseUrl: "https://fallback.example/v1", api: "openai-completions" },
+	];
+
+	assert.deepEqual(applyStoredModelCatalog(models, {}), [models[0]]);
+	assert.deepEqual(
+		applyStoredModelCatalog(models, {
+			access: "agent-key",
+			expires: Date.now() - 60_000,
+			modelCatalogUnavailable: true,
+		}),
+		[models[0]],
+	);
+});
+
+test("modifyModels adds fallback catalog only for usable OAuth credentials with unavailable discovery", () => {
+	const models = [{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" }];
+	const modified = applyStoredModelCatalog(models, {
+		access: "agent-key",
+		expires: Date.now() + 60_000,
+		inferenceBaseUrl: "https://oauth-inference.example/v1",
+		modelCatalogUnavailable: true,
+	});
+	const nousModels = modified.filter((model) => model.provider === PROVIDER_ID);
+
+	assert.equal(modified[0].provider, "openai");
+	assert.ok(nousModels.length > 5);
+	assert.equal(nousModels[0].baseUrl, "https://oauth-inference.example/v1");
+});
+
+test("modifyModels keeps nous-portal blank after a successful empty OAuth catalog", () => {
+	const models = [
+		{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" },
+		{ provider: PROVIDER_ID, id: "fallback", baseUrl: "https://fallback.example/v1", api: "openai-completions" },
+	];
+	const modified = applyStoredModelCatalog(models, {
+		access: "agent-key",
+		expires: Date.now() + 60_000,
+		modelCatalog: [],
+		modelCatalogUnavailable: false,
+	});
+
+	assert.deepEqual(modified, [models[0]]);
 });

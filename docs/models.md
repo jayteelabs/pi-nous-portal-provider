@@ -26,7 +26,7 @@
 
 3. Static fallback catalog
 
-   If Nous discovery is unavailable, startup uses the curated fallback list in `extensions/nous-portal/models.ts`. The fallback includes static capability hints for common reasoning and image-capable model families, but live Nous plus OpenRouter metadata wins whenever available.
+   If Pi has usable Nous credentials and Nous discovery is unavailable, the package uses the curated fallback list in `extensions/nous-portal/models.ts`. The fallback includes static capability hints for common reasoning and image-capable model families, but live Nous plus OpenRouter metadata wins whenever available. Without credentials, with invalid credentials, or after a successful empty Nous allowlist, the provider model list stays blank.
 
 ## Field Mapping
 
@@ -39,6 +39,6 @@
 
 ## Failure Behavior
 
-OpenRouter metadata is optional. If it times out, returns an error, or has no matching model ID, the package keeps the Nous model entry unchanged. If Nous discovery fails, the package falls back to the static catalog.
+OpenRouter metadata is optional. If it times out, returns an error, or has no matching model ID, the package keeps the Nous model entry unchanged. If authenticated Nous discovery fails because the service is unavailable or times out, the package falls back to the static catalog. If no credentials are present, credentials are rejected, or Nous returns an empty allowlist, the package keeps the Nous provider blank.
 
 The package does not read `~/.hermes/auth.json`; Hermes is only an implementation reference.
