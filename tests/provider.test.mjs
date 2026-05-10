@@ -12,13 +12,32 @@ function jsonResponse(payload, init = {}) {
 
 function capturePi() {
 	const registrations = [];
+	const handlers = new Map();
 	return {
 		registrations,
+		handlers,
 		pi: {
 			registerProvider(id, config) {
 				registrations.push({ id, config });
 			},
+			on(event, handler) {
+				handlers.set(event, handler);
+			},
 		},
+	};
+}
+
+function storedModel(id, baseUrl = "https://inference.example/v1") {
+	return {
+		id,
+		name: id,
+		api: "openai-completions",
+		baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 4096,
 	};
 }
 
@@ -57,6 +76,183 @@ test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and bla
 		assert.equal(typeof config.oauth.getApiKey, "function");
 		assert.equal(typeof config.oauth.modifyModels, "function");
 	});
+});
+
+test("OAuth login re-registers the provider with the returned model catalog", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async (input) => {
+		const url = String(input);
+		if (url.endsWith("/api/oauth/device/code")) {
+			return jsonResponse({
+				device_code: "device-code",
+				user_code: "USER-CODE",
+				verification_uri: "https://portal.example/verify",
+				verification_uri_complete: "https://portal.example/verify?user_code=USER-CODE",
+				expires_in: 600,
+				interval: 1,
+			});
+		}
+		if (url.endsWith("/api/oauth/token")) {
+			return jsonResponse({
+				access_token: "portal-access",
+				refresh_token: "portal-refresh",
+				expires_in: 3600,
+			});
+		}
+		if (url.endsWith("/api/oauth/agent-key")) {
+			return jsonResponse({
+				api_key: "agent-key",
+				expires_in: 3600,
+				inference_base_url: "https://inference.example/v1",
+			});
+		}
+		if (url === "https://inference.example/v1/models") return jsonResponse({ data: [{ id: "live-model" }] });
+		return jsonResponse({ data: [] });
+	};
+	try {
+		await withEnv(
+			{
+				NOUS_API_KEY: undefined,
+				NOUS_PORTAL_BASE_URL: "https://portal.example",
+				NOUS_INFERENCE_BASE_URL: "https://inference.example/v1",
+			},
+			async () => {
+				const { pi, registrations } = capturePi();
+				await nousPortalProvider(pi);
+				assert.deepEqual(registrations[0].config.models, []);
+
+				const credentials = await registrations[0].config.oauth.login({
+					onAuth: () => {},
+					onPrompt: async () => "",
+				});
+
+				assert.equal(credentials.modelCatalog[0].id, "live-model");
+				assert.equal(registrations.length, 2);
+				assert.equal(registrations[1].id, PROVIDER_ID);
+				assert.deepEqual(
+					registrations[1].config.models.map((model) => model.id),
+					["live-model"],
+				);
+				assert.equal(registrations[1].config.baseUrl, "https://inference.example/v1");
+			},
+		);
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+});
+
+test("session_start refreshes and re-registers OAuth models from auth storage", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async (input) => {
+		if (String(input) === "https://inference.example/v1/models") return jsonResponse({ data: [{ id: "refreshed-model" }] });
+		return jsonResponse({ data: [] });
+	};
+	try {
+		await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
+			const { pi, registrations, handlers } = capturePi();
+			await nousPortalProvider(pi);
+			let credentials = {
+				type: "oauth",
+				access: "agent-key",
+				expires: Date.now() + 60_000,
+				inferenceBaseUrl: "https://inference.example/v1",
+				modelCatalog: [storedModel("cached-model")],
+			};
+			const apiKeyCalls = [];
+
+			await handlers.get("session_start")?.(
+				{ reason: "startup" },
+				{
+					modelRegistry: {
+						authStorage: {
+							getApiKey(provider, options) {
+								apiKeyCalls.push({ provider, options });
+								return "agent-key";
+							},
+							get(provider) {
+								return provider === PROVIDER_ID ? credentials : undefined;
+							},
+							set(provider, updated) {
+								if (provider === PROVIDER_ID) credentials = updated;
+							},
+						},
+					},
+				},
+			);
+
+			assert.deepEqual(apiKeyCalls, [{ provider: PROVIDER_ID, options: { includeFallback: false } }]);
+			assert.equal(credentials.modelCatalog[0].id, "refreshed-model");
+			assert.equal(credentials.modelCatalogUnavailable, false);
+			assert.equal(registrations.length, 2);
+			assert.deepEqual(
+				registrations[1].config.models.map((model) => model.id),
+				["refreshed-model"],
+			);
+			assert.equal(registrations[1].config.models[0].baseUrl, "https://inference.example/v1");
+		});
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+});
+
+test("session_start keeps the provider blank when auth storage has no Nous credentials", async () => {
+	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
+		const { pi, registrations, handlers } = capturePi();
+		await nousPortalProvider(pi);
+
+		await handlers.get("session_start")?.(
+			{ reason: "startup" },
+			{
+				modelRegistry: {
+					authStorage: {
+						getApiKey: () => undefined,
+						get: () => undefined,
+					},
+				},
+			},
+		);
+
+		assert.equal(registrations.length, 2);
+		assert.deepEqual(registrations[1].config.models, []);
+	});
+});
+
+test("session_start registers fallback models when cached OAuth catalog is unavailable", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async () => jsonResponse({ error: "unavailable" }, { status: 503 });
+	try {
+		await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
+			const { pi, registrations, handlers } = capturePi();
+			await nousPortalProvider(pi);
+			let credentials = {
+				type: "oauth",
+				access: "agent-key",
+				expires: Date.now() + 60_000,
+				inferenceBaseUrl: "https://inference.example/v1",
+			};
+
+			await handlers.get("session_start")?.(
+				{ reason: "startup" },
+				{
+					modelRegistry: {
+						authStorage: {
+							getApiKey: () => "agent-key",
+							get: () => credentials,
+							set: (_provider, updated) => {
+								credentials = updated;
+							},
+						},
+					},
+				},
+			);
+
+			assert.equal(credentials.modelCatalogUnavailable, true);
+			assert.ok(registrations[1].config.models.length > 5);
+			assert.equal(registrations[1].config.models[0].baseUrl, "https://inference.example/v1");
+		});
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
 });
 
 test("startup model discovery uses NOUS_API_KEY and live /models when available", async () => {

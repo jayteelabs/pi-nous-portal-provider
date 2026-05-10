@@ -506,7 +506,7 @@ export function coerceStoredCatalog(value: unknown): NousProviderModelConfig[] {
 	return value.filter(isProviderModelConfig);
 }
 
-function credentialsHaveUsableAgentKey(credentials: { [key: string]: unknown }): boolean {
+export function credentialsHaveUsableAgentKey(credentials: { [key: string]: unknown }): boolean {
 	const access = typeof credentials.access === "string" && credentials.access.trim().length > 0;
 	const expires =
 		typeof credentials.expires === "number"
@@ -515,6 +515,18 @@ function credentialsHaveUsableAgentKey(credentials: { [key: string]: unknown }):
 				? Number(credentials.expires)
 				: NaN;
 	return access && Number.isFinite(expires) && expires > Date.now();
+}
+
+export function modelsForStoredCredentials(credentials: { [key: string]: unknown } = {}): NousProviderModelConfig[] {
+	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
+	if (!credentialsHaveUsableAgentKey(credentials)) return [];
+
+	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
+	if (storedCatalog.length > 0) return storedCatalog.map((model) => ({ ...model, baseUrl }));
+
+	if (credentials.modelCatalogUnavailable === true) return buildFallbackModels(baseUrl);
+
+	return [];
 }
 
 function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): Model<Api>[] {
@@ -533,12 +545,7 @@ function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): 
 export function applyStoredModelCatalog(models: Model<Api>[], credentials: { [key: string]: unknown } = {}): Model<Api>[] {
 	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
 	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
-	if (!credentialsHaveUsableAgentKey(credentials)) return nonNousModels;
-
-	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
-	if (storedCatalog.length > 0) return [...nonNousModels, ...toProviderModels(storedCatalog, baseUrl)];
-
-	if (credentials.modelCatalogUnavailable === true) return [...nonNousModels, ...toProviderModels(buildFallbackModels(baseUrl), baseUrl)];
-
-	return nonNousModels;
+	const credentialModels = modelsForStoredCredentials(credentials);
+	if (credentialModels.length === 0) return nonNousModels;
+	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];
 }
