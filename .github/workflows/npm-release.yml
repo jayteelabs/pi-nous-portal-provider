@@ -36,15 +36,19 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
           token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --legacy-peer-deps
 
       - name: Test
         run: npm test
@@ -86,20 +90,25 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
+    outputs:
+      package_name: ${{ steps.package.outputs.name }}
+      package_version: ${{ steps.package.outputs.version }}
+      already_published: ${{ steps.npm.outputs.published }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --legacy-peer-deps
 
       - name: Test
         run: npm test
@@ -124,10 +133,30 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create release tag
+      - name: Publish package
         if: steps.npm.outputs.published == 'false'
+        run: npm publish --provenance --access public
+
+      - name: Skip existing version
+        if: steps.npm.outputs.published == 'true'
+        run: echo "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }} is already published."
+
+  tag-release:
+    name: Create release tag
+    needs: publish
+    if: github.event_name == 'push' && needs.publish.outputs.already_published == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Create release tag
         env:
-          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+          PACKAGE_VERSION: ${{ needs.publish.outputs.package_version }}
         run: |
           tag="v${PACKAGE_VERSION}"
           if git rev-parse "refs/tags/${tag}" > /dev/null 2>&1; then
@@ -139,11 +168,3 @@ jobs:
             git tag "$tag"
             git push origin "$tag"
           fi
-
-      - name: Publish package
-        if: steps.npm.outputs.published == 'false'
-        run: npm publish --access public
-
-      - name: Skip existing version
-        if: steps.npm.outputs.published == 'true'
-        run: echo "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }} is already published."

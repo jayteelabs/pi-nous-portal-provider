@@ -11,7 +11,8 @@ pi install npm:@jayteelabs/pi-nous-portal-provider
 ## Usage
 
 ```sh
-NOUS_API_KEY=... pi -p nous-portal -m openai/gpt-5.5
+# Export NOUS_API_KEY from your shell or secrets manager before running Pi.
+pi -p nous-portal -m openai/gpt-5.5
 pi -e ./pi-nous-portal-provider --list-models
 ```
 
