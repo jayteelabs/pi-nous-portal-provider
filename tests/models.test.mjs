@@ -242,6 +242,18 @@ test("catalog policy records OAuth discovery success versus unavailable without 
 	assert.deepEqual(unavailable, { unavailable: true });
 });
 
+
+test("catalog policy marks OAuth /models auth failures without enabling fallback", async () => {
+	for (const status of [401, 403]) {
+		const authFailure = await refreshOAuthCatalog({
+			apiKey: "revoked-agent-key",
+			fetchFn: async () => jsonResponse({ error: "unauthorized" }, { status }),
+		});
+
+		assert.deepEqual(authFailure, { unavailable: false, authFailed: true });
+	}
+});
+
 test("catalog policy selects stored, fallback, and blank credential catalogs deterministically", () => {
 	const now = Date.parse("2026-01-01T00:00:00.000Z");
 	const stored = {
@@ -272,6 +284,19 @@ test("catalog policy selects stored, fallback, and blank credential catalogs det
 			{ now: () => now },
 		),
 		[{ ...stored, baseUrl: "https://fresh.example/v1" }],
+	);
+	assert.deepEqual(
+		selectStoredCredentialCatalog(
+			{
+				access: "agent",
+				expires: now + 60_000,
+				modelCatalog: [stored],
+				modelCatalogAuthFailed: true,
+				modelCatalogUnavailable: true,
+			},
+			{ now: () => now },
+		),
+		[],
 	);
 	assert.deepEqual(
 		selectStoredCredentialCatalog(

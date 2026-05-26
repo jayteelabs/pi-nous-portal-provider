@@ -79,6 +79,7 @@ type AgentKeyResponse = {
 type ModelCatalogRefreshResult = {
 	catalog?: NousProviderModelConfig[];
 	unavailable: boolean;
+	authFailed?: boolean;
 };
 
 export type NousOAuthCredentials = OAuthCredentials & {
@@ -97,6 +98,7 @@ export type NousOAuthCredentials = OAuthCredentials & {
 	modelCatalog?: NousProviderModelConfig[];
 	modelCatalogFetchedAt?: number;
 	modelCatalogUnavailable?: boolean;
+	modelCatalogAuthFailed?: boolean;
 };
 
 class PortalHttpError extends Error {
@@ -441,9 +443,10 @@ function createCredentials(
 		agentKeyExpiresIn: mint.expires_in,
 		agentKeyReused: mint.reused,
 		agentKeyObtainedAt: config.now(),
-		modelCatalog: modelCatalogRefresh.catalog,
-		modelCatalogFetchedAt: modelCatalogRefresh.unavailable ? undefined : config.now(),
+		modelCatalog: modelCatalogRefresh.authFailed ? [] : modelCatalogRefresh.catalog,
+		modelCatalogFetchedAt: modelCatalogRefresh.unavailable || modelCatalogRefresh.authFailed ? undefined : config.now(),
 		modelCatalogUnavailable: modelCatalogRefresh.unavailable,
+		modelCatalogAuthFailed: modelCatalogRefresh.authFailed === true,
 	};
 }
 
@@ -523,9 +526,15 @@ function mergeMintIntoCredentials(
 		agentKeyExpiresIn: mint.expires_in,
 		agentKeyReused: mint.reused,
 		agentKeyObtainedAt: config.now(),
-		modelCatalog: modelCatalogRefresh.unavailable ? credentials.modelCatalog : modelCatalogRefresh.catalog,
-		modelCatalogFetchedAt: modelCatalogRefresh.unavailable ? credentials.modelCatalogFetchedAt : config.now(),
-		modelCatalogUnavailable: modelCatalogRefresh.unavailable,
+		modelCatalog: modelCatalogRefresh.authFailed
+			? []
+			: modelCatalogRefresh.unavailable
+				? credentials.modelCatalog
+				: modelCatalogRefresh.catalog,
+		modelCatalogFetchedAt:
+			modelCatalogRefresh.authFailed || modelCatalogRefresh.unavailable ? credentials.modelCatalogFetchedAt : config.now(),
+		modelCatalogUnavailable: modelCatalogRefresh.authFailed ? false : modelCatalogRefresh.unavailable,
+		modelCatalogAuthFailed: modelCatalogRefresh.authFailed === true,
 	};
 }
 

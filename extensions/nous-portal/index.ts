@@ -120,14 +120,17 @@ async function refreshCredentialModelCatalog(
 		baseUrl,
 		timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
 	});
-	const updated = refresh.unavailable
-		? { ...credentials, modelCatalogUnavailable: true }
-		: {
-				...credentials,
-				modelCatalog: refresh.catalog,
-				modelCatalogFetchedAt: refresh.fetchedAt,
-				modelCatalogUnavailable: false,
-			};
+	const updated = refresh.authFailed
+		? { ...credentials, modelCatalog: [], modelCatalogAuthFailed: true, modelCatalogUnavailable: false }
+		: refresh.unavailable
+			? { ...credentials, modelCatalogAuthFailed: false, modelCatalogUnavailable: true }
+			: {
+					...credentials,
+					modelCatalog: refresh.catalog,
+					modelCatalogFetchedAt: refresh.fetchedAt,
+					modelCatalogAuthFailed: false,
+					modelCatalogUnavailable: false,
+				};
 	authStorage.set?.(PROVIDER_ID, updated);
 	return updated;
 }

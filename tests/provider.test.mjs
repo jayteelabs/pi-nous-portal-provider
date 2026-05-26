@@ -255,6 +255,49 @@ test("session_start registers fallback models when cached OAuth catalog is unava
 	}
 });
 
+
+test("session_start keeps OAuth models blank on /models auth failure", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async () => jsonResponse({ error: "revoked" }, { status: 401 });
+	try {
+		await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
+			const { pi, registrations, handlers } = capturePi();
+			await nousPortalProvider(pi);
+			let credentials = {
+				type: "oauth",
+				access: "agent-key",
+				expires: Date.now() + 60_000,
+				inferenceBaseUrl: "https://inference.example/v1",
+				modelCatalog: [storedModel("cached-model")],
+				modelCatalogUnavailable: true,
+			};
+
+			await handlers.get("session_start")?.(
+				{ reason: "startup" },
+				{
+					modelRegistry: {
+						authStorage: {
+							getApiKey: () => "agent-key",
+							get: () => credentials,
+							set: (_provider, updated) => {
+								credentials = updated;
+							},
+						},
+					},
+				},
+			);
+
+			assert.equal(credentials.modelCatalogAuthFailed, true);
+			assert.equal(credentials.modelCatalogUnavailable, false);
+			assert.deepEqual(credentials.modelCatalog, []);
+			assert.equal(registrations.length, 2);
+			assert.deepEqual(registrations[1].config.models, []);
+		});
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+});
+
 test("startup model discovery uses NOUS_API_KEY and live /models when available", async () => {
 	const previousFetch = globalThis.fetch;
 	const calls = [];

@@ -20,6 +20,7 @@ export type CatalogPolicyCredentials = {
 	inferenceBaseUrl?: unknown;
 	modelCatalog?: unknown;
 	modelCatalogUnavailable?: unknown;
+	modelCatalogAuthFailed?: unknown;
 };
 
 export type ResolveDirectCatalogOptions = {
@@ -46,6 +47,7 @@ export type RefreshOAuthCatalogOptions = {
 export type OAuthCatalogRefreshResult = {
 	catalog?: NousProviderModelConfig[];
 	unavailable: boolean;
+	authFailed?: boolean;
 	fetchedAt?: number;
 };
 
@@ -98,7 +100,8 @@ export async function refreshOAuthCatalog(options: RefreshOAuthCatalogOptions): 
 			signal: options.signal,
 		});
 		return { catalog, unavailable: false, fetchedAt: (options.now ?? Date.now)() };
-	} catch {
+	} catch (error) {
+		if (isModelCatalogAuthError(error)) return { unavailable: false, authFailed: true };
 		return { unavailable: true };
 	}
 }
@@ -109,6 +112,8 @@ export function selectStoredCredentialCatalog(
 ): NousProviderModelConfig[] {
 	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
 	if (!credentialsHaveUsableAgentKey(credentials, options)) return [];
+
+	if (credentials.modelCatalogAuthFailed === true) return [];
 
 	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
 	if (storedCatalog.length > 0) return storedCatalog.map((model) => ({ ...model, baseUrl }));
