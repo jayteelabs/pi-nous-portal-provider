@@ -4,15 +4,17 @@ import {
 	DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
 	PROVIDER_ID,
 	PROVIDER_NAME,
-	applyStoredModelCatalog,
-	buildFallbackModels,
 	fetchModelCatalog,
 	getInferenceBaseUrl,
-	isModelCatalogAuthError,
-	modelsForStoredCredentials,
 	normalizeBaseUrl,
 	type NousProviderModelConfig,
 } from "./models.ts";
+import {
+	applyCatalogToProviderModels,
+	refreshOAuthCatalog,
+	resolveDirectCatalog,
+	selectStoredCredentialCatalog,
+} from "./model-catalog-policy.ts";
 import {
 	getNousPortalApiKey,
 	loginNousPortal,
@@ -32,15 +34,11 @@ type SessionContextLike = {
 };
 
 async function discoverModels(apiKey: string, inferenceBaseUrl: string) {
-	if (!apiKey) return [];
-	try {
-		return await fetchModelCatalog(apiKey, inferenceBaseUrl, {
-			timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
-		});
-	} catch (error) {
-		if (isModelCatalogAuthError(error)) return [];
-		return buildFallbackModels(inferenceBaseUrl);
-	}
+	return resolveDirectCatalog({
+		apiKey,
+		baseUrl: inferenceBaseUrl,
+		timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+	});
 }
 
 async function startupModels(baseUrl = getInferenceBaseUrl()) {
@@ -65,7 +63,7 @@ function createProviderConfig(
 			login,
 			refreshToken: refreshNousPortalCredentials,
 			getApiKey: getNousPortalApiKey,
-			modifyModels: applyStoredModelCatalog,
+			modifyModels: applyCatalogToProviderModels,
 		},
 	};
 }
@@ -97,7 +95,7 @@ function registerCredentialModels(
 	credentials: { [key: string]: unknown },
 ) {
 	const baseUrl = providerBaseUrlFromCredentials(credentials);
-	registerNousPortalProvider(pi, baseUrl, modelsForStoredCredentials(credentials), login);
+	registerNousPortalProvider(pi, baseUrl, selectStoredCredentialCatalog(credentials), login);
 }
 
 async function apiKeyFromAuthStorage(authStorage: AuthStorageLike): Promise<string | undefined> {
@@ -116,24 +114,25 @@ async function refreshCredentialModelCatalog(
 ): Promise<{ [key: string]: unknown }> {
 	if (!apiKey) return credentials;
 
-	try {
-		const baseUrl = providerBaseUrlFromCredentials(credentials);
-		const modelCatalog = await fetchModelCatalog(apiKey, baseUrl, {
-			timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
-		});
-		const updated = {
-			...credentials,
-			modelCatalog,
-			modelCatalogFetchedAt: Date.now(),
-			modelCatalogUnavailable: false,
-		};
-		authStorage.set?.(PROVIDER_ID, updated);
-		return updated;
-	} catch {
-		const updated = { ...credentials, modelCatalogUnavailable: true };
-		authStorage.set?.(PROVIDER_ID, updated);
-		return updated;
-	}
+	const baseUrl = providerBaseUrlFromCredentials(credentials);
+	const refresh = await refreshOAuthCatalog({
+		apiKey,
+		baseUrl,
+		timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+	});
+	const updated = refresh.authFailed
+		? { ...credentials, modelCatalog: [], modelCatalogAuthFailed: true, modelCatalogUnavailable: false }
+		: refresh.unavailable
+			? { ...credentials, modelCatalogAuthFailed: false, modelCatalogUnavailable: true }
+			: {
+					...credentials,
+					modelCatalog: refresh.catalog,
+					modelCatalogFetchedAt: refresh.fetchedAt,
+					modelCatalogAuthFailed: false,
+					modelCatalogUnavailable: false,
+				};
+	authStorage.set?.(PROVIDER_ID, updated);
+	return updated;
 }
 
 async function registerSessionModels(
@@ -174,7 +173,7 @@ export default async function nousPortalProvider(pi: ExtensionAPI) {
 export {
 	PROVIDER_ID,
 	PROVIDER_NAME,
-	applyStoredModelCatalog as modifyNousPortalModels,
+	applyCatalogToProviderModels as modifyNousPortalModels,
 	fetchModelCatalog,
 	loginNousPortal,
 	refreshNousPortalCredentials,

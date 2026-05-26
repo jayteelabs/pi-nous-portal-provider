@@ -155,6 +155,38 @@ test("device-code login marks the model catalog unavailable when discovery fails
 	assert.equal(credentials.modelCatalogUnavailable, true);
 });
 
+
+test("device-code login keeps model catalog blank on discovery auth failure", async () => {
+	const { fetchFn } = createFetchMock([
+		{ body: deviceCodeResponse() },
+		{
+			body: {
+				access_token: "portal-access",
+				refresh_token: "portal-refresh",
+				expires_in: 3600,
+			},
+		},
+		{ body: { api_key: "agent-key", expires_in: 3600 } },
+		{ status: 403, body: { error: "revoked" } },
+	]);
+
+	const credentials = await loginNousPortal(
+		{ onAuth: () => {}, onPrompt: async () => "" },
+		{
+			fetchFn,
+			sleepFn: async () => {},
+			portalBaseUrl: "https://portal.example",
+		},
+	);
+
+	assert.equal(credentials.access, "agent-key");
+	assert.deepEqual(credentials.modelCatalog, []);
+	assert.equal(credentials.modelCatalogFetchedAt, undefined);
+	assert.equal(credentials.modelCatalogUnavailable, false);
+	assert.equal(credentials.modelCatalogAuthFailed, true);
+	assert.deepEqual(applyStoredModelCatalog([], credentials), []);
+});
+
 test("device-code login reports denied authorization", async () => {
 	const { fetchFn } = createFetchMock([
 		{ body: deviceCodeResponse() },
