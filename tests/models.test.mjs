@@ -12,6 +12,12 @@ import {
 	parseOpenRouterModelMetadata,
 	parseModelCatalog,
 } from "../extensions/nous-portal/models.ts";
+import {
+	applyCatalogToProviderModels,
+	refreshOAuthCatalog,
+	resolveDirectCatalog,
+	selectStoredCredentialCatalog,
+} from "../extensions/nous-portal/model-catalog-policy.ts";
 
 function jsonResponse(payload, init = {}) {
 	return new Response(JSON.stringify(payload), {
@@ -183,4 +189,124 @@ test("fetchModelCatalog rejects when discovery times out", async () => {
 		fetchModelCatalog("sk-nous", "https://inference.example/v1", { fetchFn, timeoutMs: 1 }),
 		/Model discovery timed out/,
 	);
+});
+
+
+test("catalog policy resolves direct key outcomes without leaking fallback for blank or auth failures", async () => {
+	assert.deepEqual(await resolveDirectCatalog({ apiKey: "" }), []);
+
+	const live = await resolveDirectCatalog({
+		apiKey: "sk-nous",
+		baseUrl: "https://inference.example/v1/",
+		fetchFn: async (input) => {
+			if (String(input).endsWith("/models")) return jsonResponse({ data: [{ id: "live-a" }] });
+			return jsonResponse({ data: [] });
+		},
+	});
+	assert.deepEqual(live.map((model) => model.id), ["live-a"]);
+	assert.equal(live[0].baseUrl, "https://inference.example/v1");
+
+	const authFailure = await resolveDirectCatalog({
+		apiKey: "bad-key",
+		fetchFn: async () => jsonResponse({ error: "invalid_api_key" }, { status: 403 }),
+	});
+	assert.deepEqual(authFailure, []);
+
+	const unavailable = await resolveDirectCatalog({
+		apiKey: "sk-nous",
+		baseUrl: "https://fallback.example/v1",
+		fetchFn: async () => jsonResponse({ error: "unavailable" }, { status: 503 }),
+	});
+	assert.equal(unavailable.length, FALLBACK_MODEL_IDS.length);
+	assert.equal(unavailable[0].baseUrl, "https://fallback.example/v1");
+});
+
+test("catalog policy records OAuth discovery success versus unavailable without fallback", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const empty = await refreshOAuthCatalog({
+		apiKey: "agent-key",
+		fetchFn: async (input) => {
+			if (String(input).endsWith("/models")) return jsonResponse({ data: [] });
+			return jsonResponse({ data: [{ id: "openrouter-only" }] });
+		},
+		now: () => now,
+	});
+	assert.deepEqual(empty.catalog, []);
+	assert.equal(empty.unavailable, false);
+	assert.equal(empty.fetchedAt, now);
+
+	const unavailable = await refreshOAuthCatalog({
+		apiKey: "agent-key",
+		fetchFn: async () => jsonResponse({ error: "unavailable" }, { status: 503 }),
+	});
+	assert.deepEqual(unavailable, { unavailable: true });
+});
+
+test("catalog policy selects stored, fallback, and blank credential catalogs deterministically", () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const stored = {
+		id: "stored-model",
+		name: "Stored Model",
+		api: "openai-completions",
+		baseUrl: "https://old.example/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 4096,
+	};
+
+	assert.deepEqual(selectStoredCredentialCatalog({}, { now: () => now }), []);
+	assert.deepEqual(
+		selectStoredCredentialCatalog({ access: "agent", expires: now - 1, modelCatalogUnavailable: true }, { now: () => now }),
+		[],
+	);
+	assert.deepEqual(
+		selectStoredCredentialCatalog(
+			{
+				access: "agent",
+				expires: now + 60_000,
+				inferenceBaseUrl: "https://fresh.example/v1",
+				modelCatalog: [stored],
+			},
+			{ now: () => now },
+		),
+		[{ ...stored, baseUrl: "https://fresh.example/v1" }],
+	);
+	assert.deepEqual(
+		selectStoredCredentialCatalog(
+			{ access: "agent", expires: now + 60_000, modelCatalog: [], modelCatalogUnavailable: false },
+			{ now: () => now },
+		),
+		[],
+	);
+	assert.equal(
+		selectStoredCredentialCatalog(
+			{ access: "agent", expires: now + 60_000, modelCatalogUnavailable: true },
+			{ now: () => now },
+		).length,
+		FALLBACK_MODEL_IDS.length,
+	);
+});
+
+test("catalog policy apply preserves non-Nous models and replaces only the Nous slice", () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const models = [
+		{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" },
+		{ provider: "nous-portal", id: "old-nous", baseUrl: "https://old.example/v1", api: "openai-completions" },
+	];
+	const modified = applyCatalogToProviderModels(
+		models,
+		{
+			access: "agent",
+			expires: now + 60_000,
+			inferenceBaseUrl: "https://oauth.example/v1",
+			modelCatalogUnavailable: true,
+		},
+		{ now: () => now },
+	);
+
+	assert.equal(modified[0], models[0]);
+	assert.equal(modified[1].provider, "nous-portal");
+	assert.equal(modified[1].baseUrl, "https://oauth.example/v1");
 });

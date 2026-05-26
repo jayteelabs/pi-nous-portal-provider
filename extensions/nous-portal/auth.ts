@@ -2,9 +2,9 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai"
 import {
 	DEFAULT_INFERENCE_BASE_URL,
 	type NousProviderModelConfig,
-	fetchModelCatalog,
 	normalizeBaseUrl,
 } from "./models.ts";
+import { refreshOAuthCatalog } from "./model-catalog-policy.ts";
 
 export const DEFAULT_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const DEFAULT_CLIENT_ID = "hermes-cli";
@@ -408,16 +408,14 @@ async function refreshModelCatalog(
 	config: RuntimeConfig,
 	signal?: AbortSignal,
 ): Promise<ModelCatalogRefreshResult> {
-	try {
-		const catalog = await fetchModelCatalog(apiKey, inferenceBaseUrl, {
-			fetchFn: config.fetchFn,
-			timeoutMs: config.modelFetchTimeoutMs,
-			signal,
-		});
-		return { catalog, unavailable: false };
-	} catch {
-		return { unavailable: true };
-	}
+	return refreshOAuthCatalog({
+		apiKey,
+		baseUrl: inferenceBaseUrl,
+		fetchFn: config.fetchFn,
+		timeoutMs: config.modelFetchTimeoutMs,
+		signal,
+		now: config.now,
+	});
 }
 
 function createCredentials(

@@ -506,46 +506,8 @@ export function coerceStoredCatalog(value: unknown): NousProviderModelConfig[] {
 	return value.filter(isProviderModelConfig);
 }
 
-export function credentialsHaveUsableAgentKey(credentials: { [key: string]: unknown }): boolean {
-	const access = typeof credentials.access === "string" && credentials.access.trim().length > 0;
-	const expires =
-		typeof credentials.expires === "number"
-			? credentials.expires
-			: typeof credentials.expires === "string" && credentials.expires.trim()
-				? Number(credentials.expires)
-				: NaN;
-	return access && Number.isFinite(expires) && expires > Date.now();
-}
-
-export function modelsForStoredCredentials(credentials: { [key: string]: unknown } = {}): NousProviderModelConfig[] {
-	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
-	if (!credentialsHaveUsableAgentKey(credentials)) return [];
-
-	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
-	if (storedCatalog.length > 0) return storedCatalog.map((model) => ({ ...model, baseUrl }));
-
-	if (credentials.modelCatalogUnavailable === true) return buildFallbackModels(baseUrl);
-
-	return [];
-}
-
-function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): Model<Api>[] {
-	return catalog.map(
-		(model) =>
-			({
-				...model,
-				provider: PROVIDER_ID,
-				api: "openai-completions",
-				baseUrl,
-				compat: { ...OPENAI_COMPAT, ...(model.compat ?? {}) },
-			}) as Model<Api>,
-	);
-}
-
-export function applyStoredModelCatalog(models: Model<Api>[], credentials: { [key: string]: unknown } = {}): Model<Api>[] {
-	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
-	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
-	const credentialModels = modelsForStoredCredentials(credentials);
-	if (credentialModels.length === 0) return nonNousModels;
-	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];
-}
+export {
+	applyCatalogToProviderModels as applyStoredModelCatalog,
+	credentialsHaveUsableAgentKey,
+	selectStoredCredentialCatalog as modelsForStoredCredentials,
+} from "./model-catalog-policy.ts";
