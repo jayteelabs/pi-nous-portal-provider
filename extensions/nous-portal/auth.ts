@@ -4,7 +4,7 @@ import {
 	type NousProviderModelConfig,
 	normalizeBaseUrl,
 } from "./models.ts";
-import { refreshOAuthCatalog } from "./model-catalog-policy.ts";
+import { refreshOAuthCatalog, selectStoredCredentialCatalog } from "./model-catalog-policy.ts";
 
 export const DEFAULT_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const DEFAULT_CLIENT_ID = "hermes-cli";
@@ -32,6 +32,7 @@ export type NousOAuthOptions = {
 	modelFetchTimeoutMs?: number;
 	forcePortalRefresh?: boolean;
 	forceMint?: boolean;
+	refreshModelCatalog?: boolean;
 };
 
 type RuntimeConfig = {
@@ -47,6 +48,7 @@ type RuntimeConfig = {
 	modelFetchTimeoutMs: number;
 	forcePortalRefresh: boolean;
 	forceMint: boolean;
+	refreshModelCatalog: boolean;
 };
 
 type DeviceCodeResponse = {
@@ -80,6 +82,25 @@ type ModelCatalogRefreshResult = {
 	catalog?: NousProviderModelConfig[];
 	unavailable: boolean;
 	authFailed?: boolean;
+	fetchedAt?: number;
+};
+
+export type NousOAuthLifecycleTransition =
+	| "usable-agent-key"
+	| "portal-token-refreshed"
+	| "agent-key-minted"
+	| "invalid-portal-token-retried";
+
+export type NousOAuthCatalogStatus = "refreshed" | "unavailable" | "auth-failed-blank" | "unchanged";
+
+export type NousOAuthLifecycleOutcome = {
+	credentials: NousOAuthCredentials;
+	credentialChanged: boolean;
+	apiKey: string;
+	inferenceBaseUrl: string;
+	transition: NousOAuthLifecycleTransition;
+	catalogStatus: NousOAuthCatalogStatus;
+	registrationCatalog: NousProviderModelConfig[];
 };
 
 export type NousOAuthCredentials = OAuthCredentials & {
@@ -143,6 +164,7 @@ function resolveOptions(options: NousOAuthOptions = {}): RuntimeConfig {
 		modelFetchTimeoutMs: Math.max(1, Math.floor(options.modelFetchTimeoutMs ?? 3000)),
 		forcePortalRefresh: Boolean(options.forcePortalRefresh),
 		forceMint: Boolean(options.forceMint),
+		refreshModelCatalog: Boolean(options.refreshModelCatalog),
 	};
 }
 
@@ -444,9 +466,59 @@ function createCredentials(
 		agentKeyReused: mint.reused,
 		agentKeyObtainedAt: config.now(),
 		modelCatalog: modelCatalogRefresh.authFailed ? [] : modelCatalogRefresh.catalog,
-		modelCatalogFetchedAt: modelCatalogRefresh.unavailable || modelCatalogRefresh.authFailed ? undefined : config.now(),
+		modelCatalogFetchedAt:
+			modelCatalogRefresh.unavailable || modelCatalogRefresh.authFailed
+				? undefined
+				: (modelCatalogRefresh.fetchedAt ?? config.now()),
 		modelCatalogUnavailable: modelCatalogRefresh.unavailable,
 		modelCatalogAuthFailed: modelCatalogRefresh.authFailed === true,
+	};
+}
+
+function mergeCatalogIntoCredentials(
+	credentials: NousOAuthCredentials,
+	config: RuntimeConfig,
+	modelCatalogRefresh: ModelCatalogRefreshResult,
+): NousOAuthCredentials {
+	return {
+		...credentials,
+		modelCatalog: modelCatalogRefresh.authFailed
+			? []
+			: modelCatalogRefresh.unavailable
+				? credentials.modelCatalog
+				: modelCatalogRefresh.catalog,
+		modelCatalogFetchedAt:
+			modelCatalogRefresh.authFailed || modelCatalogRefresh.unavailable
+				? credentials.modelCatalogFetchedAt
+				: (modelCatalogRefresh.fetchedAt ?? config.now()),
+		modelCatalogUnavailable: modelCatalogRefresh.authFailed ? false : modelCatalogRefresh.unavailable,
+		modelCatalogAuthFailed: modelCatalogRefresh.authFailed === true,
+	};
+}
+
+function catalogStatus(refresh?: ModelCatalogRefreshResult): NousOAuthCatalogStatus {
+	if (!refresh) return "unchanged";
+	if (refresh.authFailed) return "auth-failed-blank";
+	if (refresh.unavailable) return "unavailable";
+	return "refreshed";
+}
+
+function lifecycleOutcome(
+	credentials: NousOAuthCredentials,
+	config: RuntimeConfig,
+	transition: NousOAuthLifecycleTransition,
+	catalog: ModelCatalogRefreshResult | undefined,
+	credentialChanged: boolean,
+): NousOAuthLifecycleOutcome {
+	const inferenceBaseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, config.inferenceBaseUrl);
+	return {
+		credentials,
+		credentialChanged,
+		apiKey: credentials.access,
+		inferenceBaseUrl,
+		transition,
+		catalogStatus: catalogStatus(catalog),
+		registrationCatalog: selectStoredCredentialCatalog(credentials, { now: config.now }),
 	};
 }
 
@@ -516,32 +588,27 @@ function mergeMintIntoCredentials(
 	mint: AgentKeyResponse,
 	modelCatalogRefresh: ModelCatalogRefreshResult,
 ): NousOAuthCredentials {
-	return {
-		...credentials,
-		access: mint.api_key,
-		expires: agentKeyExpiresAt(mint, config),
-		inferenceBaseUrl: normalizeBaseUrl(mint.inference_base_url ?? credentials.inferenceBaseUrl, config.inferenceBaseUrl),
-		agentKeyId: mint.key_id,
-		agentKeyExpiresAt: mint.expires_at,
-		agentKeyExpiresIn: mint.expires_in,
-		agentKeyReused: mint.reused,
-		agentKeyObtainedAt: config.now(),
-		modelCatalog: modelCatalogRefresh.authFailed
-			? []
-			: modelCatalogRefresh.unavailable
-				? credentials.modelCatalog
-				: modelCatalogRefresh.catalog,
-		modelCatalogFetchedAt:
-			modelCatalogRefresh.authFailed || modelCatalogRefresh.unavailable ? credentials.modelCatalogFetchedAt : config.now(),
-		modelCatalogUnavailable: modelCatalogRefresh.authFailed ? false : modelCatalogRefresh.unavailable,
-		modelCatalogAuthFailed: modelCatalogRefresh.authFailed === true,
-	};
+	return mergeCatalogIntoCredentials(
+		{
+			...credentials,
+			access: mint.api_key,
+			expires: agentKeyExpiresAt(mint, config),
+			inferenceBaseUrl: normalizeBaseUrl(mint.inference_base_url ?? credentials.inferenceBaseUrl, config.inferenceBaseUrl),
+			agentKeyId: mint.key_id,
+			agentKeyExpiresAt: mint.expires_at,
+			agentKeyExpiresIn: mint.expires_in,
+			agentKeyReused: mint.reused,
+			agentKeyObtainedAt: config.now(),
+		},
+		config,
+		modelCatalogRefresh,
+	);
 }
 
-export async function refreshNousPortalCredentials(
+export async function resolveNousPortalCredentialLifecycle(
 	credentials: OAuthCredentials,
 	options: NousOAuthOptions = {},
-): Promise<OAuthCredentials> {
+): Promise<NousOAuthLifecycleOutcome> {
 	let config = resolveOptions({
 		...options,
 		portalBaseUrl: options.portalBaseUrl ?? credentialString(credentials, "portalBaseUrl"),
@@ -552,10 +619,24 @@ export async function refreshNousPortalCredentials(
 
 	let updated = credentials as NousOAuthCredentials;
 	let didRefreshPortal = false;
+	let transition: NousOAuthLifecycleTransition = "usable-agent-key";
+	let credentialChanged = false;
+	if (config.refreshModelCatalog && !config.forceMint && !config.forcePortalRefresh && isAgentKeyUsable(updated, config)) {
+		const catalog = await refreshModelCatalog(
+			updated.access,
+			normalizeBaseUrl(updated.inferenceBaseUrl, config.inferenceBaseUrl),
+			config,
+		);
+		updated = mergeCatalogIntoCredentials(updated, config, catalog);
+		return lifecycleOutcome(updated, config, transition, catalog, true);
+	}
+
 	if (needsPortalRefresh(updated, config)) {
 		const refreshed = await refreshPortalToken(config, updated.refresh);
 		updated = mergeTokenIntoCredentials(updated, config, refreshed);
 		didRefreshPortal = true;
+		credentialChanged = true;
+		transition = "portal-token-refreshed";
 		config = resolveOptions({
 			...options,
 			portalBaseUrl: updated.portalBaseUrl,
@@ -566,7 +647,13 @@ export async function refreshNousPortalCredentials(
 	}
 
 	if (!config.forceMint && isAgentKeyUsable(updated, config)) {
-		return updated;
+		let catalog: ModelCatalogRefreshResult | undefined;
+		if (config.refreshModelCatalog) {
+			catalog = await refreshModelCatalog(updated.access, normalizeBaseUrl(updated.inferenceBaseUrl, config.inferenceBaseUrl), config);
+			updated = mergeCatalogIntoCredentials(updated, config, catalog);
+			credentialChanged = true;
+		}
+		return lifecycleOutcome(updated, config, transition, catalog, credentialChanged);
 	}
 
 	let mint: AgentKeyResponse;
@@ -577,6 +664,8 @@ export async function refreshNousPortalCredentials(
 		if ((code === "invalid_token" || code === "invalid_grant") && !didRefreshPortal) {
 			const refreshed = await refreshPortalToken(config, updated.refresh);
 			updated = mergeTokenIntoCredentials(updated, config, refreshed);
+			credentialChanged = true;
+			transition = "invalid-portal-token-retried";
 			config = resolveOptions({
 				...options,
 				portalBaseUrl: updated.portalBaseUrl,
@@ -589,10 +678,19 @@ export async function refreshNousPortalCredentials(
 			throw error;
 		}
 	}
+	if (transition !== "invalid-portal-token-retried") transition = "agent-key-minted";
 
 	const inferenceBaseUrl = normalizeBaseUrl(mint.inference_base_url ?? updated.inferenceBaseUrl, config.inferenceBaseUrl);
 	const catalog = await refreshModelCatalog(mint.api_key, inferenceBaseUrl, config);
-	return mergeMintIntoCredentials(updated, config, mint, catalog);
+	updated = mergeMintIntoCredentials(updated, config, mint, catalog);
+	return lifecycleOutcome(updated, config, transition, catalog, true);
+}
+
+export async function refreshNousPortalCredentials(
+	credentials: OAuthCredentials,
+	options: NousOAuthOptions = {},
+): Promise<OAuthCredentials> {
+	return (await resolveNousPortalCredentialLifecycle(credentials, options)).credentials;
 }
 
 export function getNousPortalApiKey(credentials: OAuthCredentials): string {
