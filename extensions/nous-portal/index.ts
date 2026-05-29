@@ -11,7 +11,6 @@ import {
 } from "./models.ts";
 import {
 	applyCatalogToProviderModels,
-	refreshOAuthCatalog,
 	resolveDirectCatalog,
 	selectStoredCredentialCatalog,
 } from "./model-catalog-policy.ts";
@@ -19,6 +18,7 @@ import {
 	getNousPortalApiKey,
 	loginNousPortal,
 	refreshNousPortalCredentials,
+	resolveNousPortalCredentialLifecycle,
 } from "./auth.ts";
 
 type AuthStorageLike = {
@@ -107,32 +107,16 @@ async function apiKeyFromAuthStorage(authStorage: AuthStorageLike): Promise<stri
 	}
 }
 
-async function refreshCredentialModelCatalog(
+async function refreshCredentialLifecycle(
 	authStorage: AuthStorageLike,
 	credentials: { [key: string]: unknown },
-	apiKey: string | undefined,
-): Promise<{ [key: string]: unknown }> {
-	if (!apiKey) return credentials;
-
-	const baseUrl = providerBaseUrlFromCredentials(credentials);
-	const refresh = await refreshOAuthCatalog({
-		apiKey,
-		baseUrl,
-		timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+) {
+	const outcome = await resolveNousPortalCredentialLifecycle(credentials as OAuthCredentials, {
+		refreshModelCatalog: true,
+		modelFetchTimeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
 	});
-	const updated = refresh.authFailed
-		? { ...credentials, modelCatalog: [], modelCatalogAuthFailed: true, modelCatalogUnavailable: false }
-		: refresh.unavailable
-			? { ...credentials, modelCatalogAuthFailed: false, modelCatalogUnavailable: true }
-			: {
-					...credentials,
-					modelCatalog: refresh.catalog,
-					modelCatalogFetchedAt: refresh.fetchedAt,
-					modelCatalogAuthFailed: false,
-					modelCatalogUnavailable: false,
-				};
-	authStorage.set?.(PROVIDER_ID, updated);
-	return updated;
+	if (outcome.credentialChanged) authStorage.set?.(PROVIDER_ID, outcome.credentials);
+	return outcome;
 }
 
 async function registerSessionModels(
@@ -146,8 +130,12 @@ async function registerSessionModels(
 	const apiKey = await apiKeyFromAuthStorage(authStorage);
 	const storedCredentials = authStorage.get?.(PROVIDER_ID);
 	if (isOAuthCredential(storedCredentials)) {
-		const refreshedCredentials = await refreshCredentialModelCatalog(authStorage, storedCredentials, apiKey);
-		registerCredentialModels(pi, login, refreshedCredentials);
+		if (!apiKey) {
+			registerCredentialModels(pi, login, storedCredentials);
+			return;
+		}
+		const outcome = await refreshCredentialLifecycle(authStorage, storedCredentials);
+		registerNousPortalProvider(pi, outcome.inferenceBaseUrl, outcome.registrationCatalog, login);
 		return;
 	}
 

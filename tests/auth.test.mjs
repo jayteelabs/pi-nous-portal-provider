@@ -10,6 +10,7 @@ import {
 	getNousPortalApiKey,
 	loginNousPortal,
 	refreshNousPortalCredentials,
+	resolveNousPortalCredentialLifecycle,
 } from "../extensions/nous-portal/auth.ts";
 
 function jsonResponse(payload, init = {}) {
@@ -291,6 +292,50 @@ test("refresh reuses a still-valid agent key", async () => {
 	const refreshed = await refreshNousPortalCredentials(credentials, { fetchFn, now: () => now });
 	assert.equal(refreshed, credentials);
 	assert.equal(calls.length, 0);
+});
+
+test("lifecycle refreshes the catalog while reusing a still-valid agent key", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const { calls, fetchFn } = createFetchMock([{ body: { data: [{ id: "session-live" }] } }]);
+	const credentials = {
+		refresh: "refresh",
+		access: "agent-key",
+		expires: now + 3600 * 1000,
+		portalAccess: "portal-access",
+		portalAccessExpires: now + 3600 * 1000,
+		portalBaseUrl: "https://portal.example",
+		inferenceBaseUrl: "https://inference.example/v1",
+		clientId: "pi",
+		modelCatalog: [
+			{
+				id: "cached",
+				name: "Cached",
+				api: "openai-completions",
+				baseUrl: "https://old.example/v1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128000,
+				maxTokens: 4096,
+			},
+		],
+	};
+
+	const outcome = await resolveNousPortalCredentialLifecycle(credentials, {
+		fetchFn,
+		now: () => now,
+		refreshModelCatalog: true,
+	});
+
+	assert.equal(outcome.transition, "usable-agent-key");
+	assert.equal(outcome.catalogStatus, "refreshed");
+	assert.equal(outcome.credentialChanged, true);
+	assert.equal(outcome.apiKey, "agent-key");
+	assert.equal(outcome.inferenceBaseUrl, "https://inference.example/v1");
+	assert.equal(outcome.credentials.modelCatalog[0].id, "session-live");
+	assert.equal(outcome.credentials.modelCatalogFetchedAt, now);
+	assert.deepEqual(outcome.registrationCatalog.map((model) => model.id), ["session-live"]);
+	assert.equal(calls[0].url, "https://inference.example/v1/models");
 });
 
 test("refresh retries mint after invalid portal access by refreshing the portal token", async () => {
