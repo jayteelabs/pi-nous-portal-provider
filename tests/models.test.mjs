@@ -314,6 +314,29 @@ test("catalog policy selects stored, fallback, and blank credential catalogs det
 	);
 });
 
+test("catalog policy raw compatibility ignores kind collisions and remains fail-closed", () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const models = [
+		{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" },
+		{ provider: "nous-portal", id: "old-nous", baseUrl: "https://old.example/v1", api: "openai-completions" },
+	];
+	const collisionBase = {
+		kind: "fallback",
+		reason: "catalog-unavailable",
+		baseUrl: "https://collision.example/v1",
+		modelCatalogUnavailable: true,
+	};
+
+	for (const credentials of [
+		{ ...collisionBase, access: "agent", expires: now + 60_000, modelCatalogAuthFailed: true },
+		{ ...collisionBase, access: "", expires: now + 60_000 },
+		{ ...collisionBase, access: "agent", expires: now - 1 },
+	]) {
+		const modified = applyCatalogToProviderModels(models, credentials, { now: () => now });
+		assert.deepEqual(modified, [models[0]]);
+	}
+});
+
 test("catalog policy apply preserves non-Nous models and replaces only the Nous slice", () => {
 	const now = Date.parse("2026-01-01T00:00:00.000Z");
 	const models = [

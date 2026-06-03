@@ -1,10 +1,15 @@
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
 import {
 	DEFAULT_INFERENCE_BASE_URL,
+	coerceStoredCatalog,
 	type NousProviderModelConfig,
 	normalizeBaseUrl,
 } from "./models.ts";
-import { refreshOAuthCatalog, selectStoredCredentialCatalog } from "./model-catalog-policy.ts";
+import {
+	refreshOAuthCatalog,
+	transformOAuthCatalogSelection,
+	type NousOAuthCatalogSelection,
+} from "./model-catalog-policy.ts";
 
 export const DEFAULT_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const DEFAULT_CLIENT_ID = "hermes-cli";
@@ -100,6 +105,7 @@ export type NousOAuthLifecycleOutcome = {
 	inferenceBaseUrl: string;
 	transition: NousOAuthLifecycleTransition;
 	catalogStatus: NousOAuthCatalogStatus;
+	catalogSelection: NousOAuthCatalogSelection;
 	registrationCatalog: NousProviderModelConfig[];
 };
 
@@ -496,6 +502,36 @@ function mergeCatalogIntoCredentials(
 	};
 }
 
+function credentialExpiry(value: unknown): number {
+	if (typeof value === "number") return value;
+	if (typeof value === "string" && value.trim()) return Number(value);
+	return NaN;
+}
+
+export function selectNousOAuthCatalogSelection(
+	credentials: Partial<NousOAuthCredentials> | Record<string, unknown> = {},
+	options: { now?: () => number; baseUrl?: string } = {},
+): NousOAuthCatalogSelection {
+	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl ?? options.baseUrl, DEFAULT_INFERENCE_BASE_URL);
+	const access = typeof credentials.access === "string" && credentials.access.trim().length > 0;
+	if (!access) return { kind: "blank", reason: "missing-agent-key", baseUrl };
+
+	const expires = credentialExpiry(credentials.expires);
+	if (!Number.isFinite(expires) || expires <= (options.now ?? Date.now)()) {
+		return { kind: "blank", reason: "expired-agent-key", baseUrl };
+	}
+
+	if (credentials.modelCatalogAuthFailed === true) return { kind: "blank", reason: "auth-failed", baseUrl };
+
+	const storedCatalog = coerceStoredCatalog(credentials.modelCatalog);
+	if (storedCatalog.length > 0) return { kind: "stored", baseUrl, catalog: storedCatalog };
+
+	if (credentials.modelCatalogUnavailable === true) return { kind: "fallback", reason: "catalog-unavailable", baseUrl };
+
+	if (Array.isArray(credentials.modelCatalog)) return { kind: "blank", reason: "successful-empty-catalog", baseUrl };
+	return { kind: "blank", reason: "no-stored-catalog", baseUrl };
+}
+
 function catalogStatus(refresh?: ModelCatalogRefreshResult): NousOAuthCatalogStatus {
 	if (!refresh) return "unchanged";
 	if (refresh.authFailed) return "auth-failed-blank";
@@ -511,6 +547,7 @@ function lifecycleOutcome(
 	credentialChanged: boolean,
 ): NousOAuthLifecycleOutcome {
 	const inferenceBaseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, config.inferenceBaseUrl);
+	const catalogSelection = selectNousOAuthCatalogSelection(credentials, { now: config.now, baseUrl: inferenceBaseUrl });
 	return {
 		credentials,
 		credentialChanged,
@@ -518,7 +555,8 @@ function lifecycleOutcome(
 		inferenceBaseUrl,
 		transition,
 		catalogStatus: catalogStatus(catalog),
-		registrationCatalog: selectStoredCredentialCatalog(credentials, { now: config.now }),
+		catalogSelection,
+		registrationCatalog: transformOAuthCatalogSelection(catalogSelection),
 	};
 }
 

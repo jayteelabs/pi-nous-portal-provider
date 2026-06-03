@@ -12,13 +12,14 @@ import {
 import {
 	applyCatalogToProviderModels,
 	resolveDirectCatalog,
-	selectStoredCredentialCatalog,
+	transformOAuthCatalogSelection,
 } from "./model-catalog-policy.ts";
 import {
 	getNousPortalApiKey,
 	loginNousPortal,
 	refreshNousPortalCredentials,
 	resolveNousPortalCredentialLifecycle,
+	selectNousOAuthCatalogSelection,
 } from "./auth.ts";
 
 type AuthStorageLike = {
@@ -77,9 +78,6 @@ function registerNousPortalProvider(
 	pi.registerProvider(PROVIDER_ID, createProviderConfig(baseUrl, models, login));
 }
 
-function providerBaseUrlFromCredentials(credentials: { [key: string]: unknown }): string {
-	return normalizeBaseUrl(credentials.inferenceBaseUrl, getInferenceBaseUrl());
-}
 
 function isRecord(value: unknown): value is { [key: string]: unknown } {
 	return typeof value === "object" && value !== null;
@@ -94,8 +92,9 @@ function registerCredentialModels(
 	login: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>,
 	credentials: { [key: string]: unknown },
 ) {
-	const baseUrl = providerBaseUrlFromCredentials(credentials);
-	registerNousPortalProvider(pi, baseUrl, selectStoredCredentialCatalog(credentials), login);
+	const providerBaseUrl = getInferenceBaseUrl();
+	const selection = selectNousOAuthCatalogSelection(credentials, { baseUrl: providerBaseUrl });
+	registerNousPortalProvider(pi, normalizeBaseUrl(selection.baseUrl, providerBaseUrl), transformOAuthCatalogSelection(selection), login);
 }
 
 async function apiKeyFromAuthStorage(authStorage: AuthStorageLike): Promise<string | undefined> {

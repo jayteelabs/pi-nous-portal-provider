@@ -256,6 +256,39 @@ test("session_start registers fallback models when cached OAuth catalog is unava
 });
 
 
+test("session_start applies env inference base URL to legacy stored OAuth fallback models", async () => {
+	await withEnv(
+		{ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: "https://env-inference.example/v1/" },
+		async () => {
+			const { pi, registrations, handlers } = capturePi();
+			await nousPortalProvider(pi);
+			const credentials = {
+				type: "oauth",
+				access: "agent-key",
+				expires: Date.now() + 60_000,
+				modelCatalogUnavailable: true,
+			};
+
+			await handlers.get("session_start")?.(
+				{ reason: "startup" },
+				{
+					modelRegistry: {
+						authStorage: {
+							getApiKey: () => undefined,
+							get: () => credentials,
+						},
+					},
+				},
+			);
+
+			assert.equal(registrations.length, 2);
+			assert.ok(registrations[1].config.models.length > 5);
+			assert.equal(registrations[1].config.baseUrl, "https://env-inference.example/v1");
+			assert.equal(registrations[1].config.models[0].baseUrl, "https://env-inference.example/v1");
+		},
+	);
+});
+
 test("session_start keeps OAuth models blank on /models auth failure", async () => {
 	const previousFetch = globalThis.fetch;
 	globalThis.fetch = async () => jsonResponse({ error: "revoked" }, { status: 401 });
