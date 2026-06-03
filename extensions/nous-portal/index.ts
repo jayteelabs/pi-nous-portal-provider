@@ -92,8 +92,9 @@ function registerCredentialModels(
 	login: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>,
 	credentials: { [key: string]: unknown },
 ) {
-	const selection = selectNousOAuthCatalogSelection(credentials);
-	registerNousPortalProvider(pi, normalizeBaseUrl(selection.baseUrl, getInferenceBaseUrl()), transformOAuthCatalogSelection(selection), login);
+	const providerBaseUrl = getInferenceBaseUrl();
+	const selection = selectNousOAuthCatalogSelection(credentials, { baseUrl: providerBaseUrl });
+	registerNousPortalProvider(pi, normalizeBaseUrl(selection.baseUrl, providerBaseUrl), transformOAuthCatalogSelection(selection), login);
 }
 
 async function apiKeyFromAuthStorage(authStorage: AuthStorageLike): Promise<string | undefined> {

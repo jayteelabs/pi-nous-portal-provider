@@ -159,13 +159,23 @@ function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): 
 
 export function applyCatalogToProviderModels(
 	models: Model<Api>[],
-	credentials: CatalogPolicyCredentials | NousOAuthCatalogSelection = {},
+	credentials: CatalogPolicyCredentials = {},
 	options: StoredCatalogSelectionOptions = {},
 ): Model<Api>[] {
-	const selection = "kind" in credentials ? credentials : undefined;
-	const baseUrl = normalizeBaseUrl(selection?.baseUrl ?? credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
+	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
 	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
-	const credentialModels = selection ? transformOAuthCatalogSelection(selection) : selectStoredCredentialCatalog(credentials, options);
+	const credentialModels = selectStoredCredentialCatalog(credentials, options);
+	if (credentialModels.length === 0) return nonNousModels;
+	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];
+}
+
+export function applyOAuthCatalogSelectionToProviderModels(
+	models: Model<Api>[],
+	selection: NousOAuthCatalogSelection,
+): Model<Api>[] {
+	const baseUrl = normalizeBaseUrl(selection.baseUrl, DEFAULT_INFERENCE_BASE_URL);
+	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
+	const credentialModels = transformOAuthCatalogSelection(selection);
 	if (credentialModels.length === 0) return nonNousModels;
 	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];
 }
