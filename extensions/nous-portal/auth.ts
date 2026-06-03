@@ -10,6 +10,13 @@ import {
 	transformOAuthCatalogSelection,
 	type NousOAuthCatalogSelection,
 } from "./model-catalog-policy.ts";
+import {
+	abortError,
+	assertNotAborted,
+	parseJsonOrTextResponse,
+	timedFetch,
+	type FetchLike,
+} from "./provider-requests.ts";
 
 export const DEFAULT_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const DEFAULT_CLIENT_ID = "hermes-cli";
@@ -19,8 +26,6 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 export const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
 export const KEY_EXPIRY_SKEW_MS = 5 * 60 * 1000;
 export const DEVICE_POLL_INTERVAL_CAP_SECONDS = 30;
-
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
@@ -194,41 +199,6 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-function abortError(signal?: AbortSignal): Error {
-	return signal?.reason instanceof Error ? signal.reason : new Error("Operation aborted");
-}
-
-function assertNotAborted(signal?: AbortSignal): void {
-	if (signal?.aborted) throw abortError(signal);
-}
-
-function timeoutSignal(timeoutMs: number, parent?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
-	const controller = new AbortController();
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const abortFromParent = () => controller.abort(parent?.reason);
-	if (parent?.aborted) controller.abort(parent.reason);
-	else parent?.addEventListener("abort", abortFromParent, { once: true });
-	timeout = setTimeout(() => controller.abort(new Error("Nous Portal request timed out")), timeoutMs);
-	return {
-		signal: controller.signal,
-		cleanup: () => {
-			clearTimeout(timeout);
-			parent?.removeEventListener("abort", abortFromParent);
-		},
-	};
-}
-
-async function parseJsonResponse(response: Response): Promise<unknown> {
-	const contentType = response.headers.get("content-type") ?? "";
-	if (contentType.includes("application/json")) return response.json();
-	const text = await response.text();
-	try {
-		return JSON.parse(text);
-	} catch {
-		return text;
-	}
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -252,12 +222,14 @@ async function request(
 	init: RequestInit,
 	parentSignal?: AbortSignal,
 ): Promise<Response> {
-	const { signal, cleanup } = timeoutSignal(config.requestTimeoutMs, parentSignal);
-	try {
-		return await config.fetchFn(url, { ...init, signal });
-	} finally {
-		cleanup();
-	}
+	return timedFetch({
+		fetchFn: config.fetchFn,
+		url,
+		init,
+		timeoutMs: config.requestTimeoutMs,
+		timeoutMessage: "Nous Portal request timed out",
+		signal: parentSignal,
+	});
 }
 
 async function postForm(
@@ -289,7 +261,7 @@ async function requestDeviceCode(config: RuntimeConfig, signal?: AbortSignal): P
 		signal,
 	);
 	if (!response.ok) throw await responseError(response, "Device code request failed");
-	const data = asRecord(await parseJsonResponse(response));
+	const data = asRecord(await parseJsonOrTextResponse(response));
 	const required = ["device_code", "user_code", "verification_uri", "verification_uri_complete"];
 	const missing = required.filter((key) => !asString(data[key]));
 	if (missing.length > 0) throw new Error(`Device code response missing fields: ${missing.join(", ")}`);
@@ -307,7 +279,7 @@ async function requestDeviceCode(config: RuntimeConfig, signal?: AbortSignal): P
 }
 
 async function responseError(response: Response, fallback: string): Promise<PortalHttpError> {
-	const payload = asRecord(await parseJsonResponse(response).catch(() => ({})));
+	const payload = asRecord(await parseJsonOrTextResponse(response).catch(() => ({})));
 	const code = asString(payload.error);
 	const description = asString(payload.error_description) ?? asString(payload.message);
 	return new PortalHttpError(`${code ? `${code}: ` : ""}${description ?? fallback}`, response.status, code);
@@ -334,7 +306,7 @@ async function pollForToken(
 			signal,
 		);
 
-		if (response.ok) return validateTokenResponse(await parseJsonResponse(response));
+		if (response.ok) return validateTokenResponse(await parseJsonOrTextResponse(response));
 
 		const error = await responseError(response, "Token polling failed");
 		if (error.code === "authorization_pending") {
@@ -384,7 +356,7 @@ async function refreshPortalToken(
 		signal,
 	);
 	if (!response.ok) throw await responseError(response, "Refresh token exchange failed");
-	return validateTokenResponse(await parseJsonResponse(response));
+	return validateTokenResponse(await parseJsonOrTextResponse(response));
 }
 
 async function mintAgentKey(
@@ -407,7 +379,7 @@ async function mintAgentKey(
 		signal,
 	);
 	if (!response.ok) throw await responseError(response, "Agent key mint request failed");
-	const data = asRecord(await parseJsonResponse(response));
+	const data = asRecord(await parseJsonOrTextResponse(response));
 	const apiKey = asString(data.api_key);
 	if (!apiKey) throw new Error("Agent key mint response missing api_key");
 	return {

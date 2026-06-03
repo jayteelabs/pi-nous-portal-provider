@@ -191,6 +191,62 @@ test("fetchModelCatalog rejects when discovery times out", async () => {
 	);
 });
 
+test("fetchModelCatalog preserves non-OK response bodies and cleans parent abort listeners", async () => {
+	const parent = new AbortController();
+	let adds = 0;
+	let removes = 0;
+	const originalAdd = parent.signal.addEventListener.bind(parent.signal);
+	const originalRemove = parent.signal.removeEventListener.bind(parent.signal);
+	parent.signal.addEventListener = (...args) => {
+		adds += 1;
+		return originalAdd(...args);
+	};
+	parent.signal.removeEventListener = (...args) => {
+		removes += 1;
+		return originalRemove(...args);
+	};
+
+	await assert.rejects(
+		fetchModelCatalog("sk-nous", "https://inference.example/v1", {
+			signal: parent.signal,
+			fetchFn: async () =>
+				new Response("service unavailable", {
+					status: 503,
+					headers: { "content-type": "text/plain" },
+				}),
+		}),
+		(error) => {
+			assert.equal(error.name, "ModelCatalogHttpError");
+			assert.equal(error.status, 503);
+			assert.equal(error.body, "service unavailable");
+			assert.match(error.message, /service unavailable/);
+			return true;
+		},
+	);
+
+	assert.equal(adds, 1);
+	assert.equal(removes, 1);
+});
+
+test("fetchModelCatalog propagates parent abort reasons and supports timeoutMs zero", async () => {
+	const parent = new AbortController();
+	const parentReason = new Error("parent stopped discovery");
+	let observedSignal;
+	const rejected = fetchModelCatalog("sk-nous", "https://inference.example/v1", {
+		timeoutMs: 0,
+		signal: parent.signal,
+		fetchFn: async (_input, init) => {
+			observedSignal = init.signal;
+			return new Promise((_resolve, reject) => {
+				init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+			});
+		},
+	});
+
+	parent.abort(parentReason);
+	await assert.rejects(rejected, (error) => error === parentReason);
+	assert.equal(observedSignal.aborted, true);
+});
 
 test("catalog policy resolves direct key outcomes without leaking fallback for blank or auth failures", async () => {
 	assert.deepEqual(await resolveDirectCatalog({ apiKey: "" }), []);
@@ -241,7 +297,6 @@ test("catalog policy records OAuth discovery success versus unavailable without 
 	});
 	assert.deepEqual(unavailable, { unavailable: true });
 });
-
 
 test("catalog policy marks OAuth /models auth failures without enabling fallback", async () => {
 	for (const status of [401, 403]) {
