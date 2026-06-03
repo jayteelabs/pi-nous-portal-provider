@@ -51,6 +51,20 @@ export type OAuthCatalogRefreshResult = {
 	fetchedAt?: number;
 };
 
+export type NousOAuthCatalogSelection =
+	| {
+			kind: "blank";
+			reason:
+				| "missing-agent-key"
+				| "expired-agent-key"
+				| "auth-failed"
+				| "successful-empty-catalog"
+				| "no-stored-catalog";
+			baseUrl: string;
+	  }
+	| { kind: "stored"; baseUrl: string; catalog: NousProviderModelConfig[] }
+	| { kind: "fallback"; reason: "catalog-unavailable"; baseUrl: string };
+
 export type StoredCatalogSelectionOptions = {
 	now?: () => number;
 };
@@ -123,6 +137,13 @@ export function selectStoredCredentialCatalog(
 	return [];
 }
 
+export function transformOAuthCatalogSelection(selection: NousOAuthCatalogSelection): NousProviderModelConfig[] {
+	const baseUrl = normalizeBaseUrl(selection.baseUrl, DEFAULT_INFERENCE_BASE_URL);
+	if (selection.kind === "blank") return [];
+	if (selection.kind === "fallback") return buildFallbackModels(baseUrl);
+	return selection.catalog.map((model) => ({ ...model, baseUrl }));
+}
+
 function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): Model<Api>[] {
 	return catalog.map(
 		(model) =>
@@ -138,12 +159,13 @@ function toProviderModels(catalog: NousProviderModelConfig[], baseUrl: string): 
 
 export function applyCatalogToProviderModels(
 	models: Model<Api>[],
-	credentials: CatalogPolicyCredentials = {},
+	credentials: CatalogPolicyCredentials | NousOAuthCatalogSelection = {},
 	options: StoredCatalogSelectionOptions = {},
 ): Model<Api>[] {
-	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
+	const selection = "kind" in credentials ? credentials : undefined;
+	const baseUrl = normalizeBaseUrl(selection?.baseUrl ?? credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
 	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
-	const credentialModels = selectStoredCredentialCatalog(credentials, options);
+	const credentialModels = selection ? transformOAuthCatalogSelection(selection) : selectStoredCredentialCatalog(credentials, options);
 	if (credentialModels.length === 0) return nonNousModels;
 	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];
 }

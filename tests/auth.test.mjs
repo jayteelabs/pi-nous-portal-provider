@@ -11,6 +11,7 @@ import {
 	loginNousPortal,
 	refreshNousPortalCredentials,
 	resolveNousPortalCredentialLifecycle,
+	selectNousOAuthCatalogSelection,
 } from "../extensions/nous-portal/auth.ts";
 
 function jsonResponse(payload, init = {}) {
@@ -224,6 +225,60 @@ test("device-code login times out while authorization is pending", async () => {
 			},
 		),
 		/Timed out/,
+	);
+});
+
+test("lifecycle selection names OAuth catalog availability outcomes", () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	const stored = {
+		id: "stored",
+		name: "stored",
+		baseUrl: "https://old.example/v1",
+		api: "openai-completions",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 4096,
+	};
+
+	assert.deepEqual(selectNousOAuthCatalogSelection({}, { now: () => now }), {
+		kind: "blank",
+		reason: "missing-agent-key",
+		baseUrl: "https://inference-api.nousresearch.com/v1",
+	});
+	assert.equal(
+		selectNousOAuthCatalogSelection({ access: "agent", expires: now - 1 }, { now: () => now }).reason,
+		"expired-agent-key",
+	);
+	assert.equal(
+		selectNousOAuthCatalogSelection(
+			{ access: "agent", expires: now + 1, modelCatalogAuthFailed: true, modelCatalogUnavailable: true },
+			{ now: () => now },
+		).reason,
+		"auth-failed",
+	);
+	assert.deepEqual(
+		selectNousOAuthCatalogSelection(
+			{ access: "agent", expires: now + 1, inferenceBaseUrl: "https://fresh.example/v1", modelCatalog: [stored] },
+			{ now: () => now },
+		),
+		{ kind: "stored", baseUrl: "https://fresh.example/v1", catalog: [stored] },
+	);
+	assert.equal(
+		selectNousOAuthCatalogSelection(
+			{ access: "agent", expires: now + 1, modelCatalogUnavailable: true },
+			{ now: () => now },
+		).kind,
+		"fallback",
+	);
+	assert.equal(
+		selectNousOAuthCatalogSelection({ access: "agent", expires: now + 1, modelCatalog: [] }, { now: () => now }).reason,
+		"successful-empty-catalog",
+	);
+	assert.equal(
+		selectNousOAuthCatalogSelection({ access: "agent", expires: now + 1 }, { now: () => now }).reason,
+		"no-stored-catalog",
 	);
 });
 
