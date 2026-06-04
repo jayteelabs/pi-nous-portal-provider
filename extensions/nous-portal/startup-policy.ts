@@ -144,9 +144,6 @@ export async function resolveSessionRegistration(input: {
 			refreshModelCatalog: true,
 			fetchFn: runtime.fetchFn,
 			now: runtime.now,
-			portalBaseUrl: runtime.portalBaseUrl,
-			inferenceBaseUrl: runtime.inferenceBaseUrl,
-			clientId: runtime.clientId,
 			minKeyTtlSeconds: runtime.minKeyTtlSeconds,
 			modelFetchTimeoutMs: runtime.modelDiscoveryTimeoutMs,
 		});
