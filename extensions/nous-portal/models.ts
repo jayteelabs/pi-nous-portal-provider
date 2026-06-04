@@ -1,4 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { readTextBody, timedFetch, type FetchLike } from "./provider-requests.ts";
 
 export const PROVIDER_ID = "nous-portal";
 export const PROVIDER_NAME = "Nous Research Portal";
@@ -26,8 +27,6 @@ export type NousProviderModelConfig = {
 	maxTokens: number;
 	compat?: Model<Api>["compat"];
 };
-
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 export class ModelCatalogHttpError extends Error {
 	readonly status: number;
@@ -386,22 +385,6 @@ export function applyOpenRouterMetadata(
 	});
 }
 
-function createTimeoutSignal(timeoutMs: number, parent?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
-	const controller = new AbortController();
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const abortFromParent = () => controller.abort(parent?.reason);
-	if (parent?.aborted) controller.abort(parent.reason);
-	else parent?.addEventListener("abort", abortFromParent, { once: true });
-	if (timeoutMs > 0) timeout = setTimeout(() => controller.abort(new Error("Model discovery timed out")), timeoutMs);
-	return {
-		signal: controller.signal,
-		cleanup: () => {
-			if (timeout) clearTimeout(timeout);
-			parent?.removeEventListener("abort", abortFromParent);
-		},
-	};
-}
-
 export async function fetchModelCatalog(
 	apiKey: string,
 	baseUrl = DEFAULT_INFERENCE_BASE_URL,
@@ -416,30 +399,31 @@ export async function fetchModelCatalog(
 	if (!apiKey.trim()) return [];
 	const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 	const fetchFn = options.fetchFn ?? fetch;
-	const { signal, cleanup } = createTimeoutSignal(options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS, options.signal);
-	try {
-		const response = await fetchFn(`${normalizedBaseUrl}/models`, {
+	const response = await timedFetch({
+		fetchFn,
+		url: `${normalizedBaseUrl}/models`,
+		init: {
 			method: "GET",
 			headers: {
 				Accept: "application/json",
 				Authorization: `Bearer ${apiKey}`,
 			},
-			signal,
-		});
-		if (!response.ok) {
-			const text = await response.text().catch(() => "");
-			throw new ModelCatalogHttpError(response.status, text);
-		}
-		const models = parseModelCatalog(await response.json(), normalizedBaseUrl);
-		return enrichModelsWithOpenRouterMetadata(models, {
-			fetchFn,
-			openRouterModelsUrl: options.openRouterModelsUrl,
-			timeoutMs: options.openRouterMetadataTimeoutMs ?? DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS,
-			signal: options.signal,
-		});
-	} finally {
-		cleanup();
+		},
+		timeoutMs: options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+		timeoutMessage: "Model discovery timed out",
+		signal: options.signal,
+	});
+	if (!response.ok) {
+		const text = await readTextBody(response);
+		throw new ModelCatalogHttpError(response.status, text);
 	}
+	const models = parseModelCatalog(await response.json(), normalizedBaseUrl);
+	return enrichModelsWithOpenRouterMetadata(models, {
+		fetchFn,
+		openRouterModelsUrl: options.openRouterModelsUrl,
+		timeoutMs: options.openRouterMetadataTimeoutMs ?? DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS,
+		signal: options.signal,
+	});
 }
 
 export async function fetchOpenRouterModelMetadata(
@@ -452,21 +436,19 @@ export async function fetchOpenRouterModelMetadata(
 ): Promise<Map<string, RawCatalogModel>> {
 	const fetchFn = options.fetchFn ?? fetch;
 	const modelsUrl = normalizeBaseUrl(options.openRouterModelsUrl, DEFAULT_OPENROUTER_MODELS_URL);
-	const { signal, cleanup } = createTimeoutSignal(
-		options.timeoutMs ?? DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS,
-		options.signal,
-	);
-	try {
-		const response = await fetchFn(modelsUrl, {
+	const response = await timedFetch({
+		fetchFn,
+		url: modelsUrl,
+		init: {
 			method: "GET",
 			headers: { Accept: "application/json" },
-			signal,
-		});
-		if (!response.ok) throw new Error(`OpenRouter /models request failed with status ${response.status}`);
-		return parseOpenRouterModelMetadata(await response.json());
-	} finally {
-		cleanup();
-	}
+		},
+		timeoutMs: options.timeoutMs ?? DEFAULT_OPENROUTER_METADATA_TIMEOUT_MS,
+		timeoutMessage: "Model discovery timed out",
+		signal: options.signal,
+	});
+	if (!response.ok) throw new Error(`OpenRouter /models request failed with status ${response.status}`);
+	return parseOpenRouterModelMetadata(await response.json());
 }
 
 export async function enrichModelsWithOpenRouterMetadata(

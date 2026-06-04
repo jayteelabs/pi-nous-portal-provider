@@ -157,7 +157,6 @@ test("device-code login marks the model catalog unavailable when discovery fails
 	assert.equal(credentials.modelCatalogUnavailable, true);
 });
 
-
 test("device-code login keeps model catalog blank on discovery auth failure", async () => {
 	const { fetchFn } = createFetchMock([
 		{ body: deviceCodeResponse() },
@@ -225,6 +224,53 @@ test("device-code login times out while authorization is pending", async () => {
 			},
 		),
 		/Timed out/,
+	);
+});
+
+test("device-code request preserves Portal timeout message and parent abort cleanup", async () => {
+	const parent = new AbortController();
+	let adds = 0;
+	let removes = 0;
+	const originalAdd = parent.signal.addEventListener.bind(parent.signal);
+	const originalRemove = parent.signal.removeEventListener.bind(parent.signal);
+	parent.signal.addEventListener = (...args) => {
+		adds += 1;
+		return originalAdd(...args);
+	};
+	parent.signal.removeEventListener = (...args) => {
+		removes += 1;
+		return originalRemove(...args);
+	};
+
+	await assert.rejects(
+		loginNousPortal(
+			{ onAuth: () => {}, onPrompt: async () => "", signal: parent.signal },
+			{
+				requestTimeoutMs: 1,
+				portalBaseUrl: "https://portal.example",
+				fetchFn: async (_input, init) =>
+					new Promise((_resolve, reject) => {
+						init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+					}),
+			},
+		),
+		/Nous Portal request timed out/,
+	);
+	assert.equal(adds, 1);
+	assert.equal(removes, 1);
+});
+
+test("device-code request keeps text Portal error fallback semantics", async () => {
+	const { fetchFn } = createFetchMock([
+		() => new Response("not json", { status: 502, headers: { "content-type": "text/plain" } }),
+	]);
+
+	await assert.rejects(
+		loginNousPortal(
+			{ onAuth: () => {}, onPrompt: async () => "" },
+			{ fetchFn, sleepFn: async () => {}, portalBaseUrl: "https://portal.example" },
+		),
+		/Device code request failed/,
 	);
 });
 
