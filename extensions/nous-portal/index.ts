@@ -1,52 +1,32 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
 import {
-	DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
 	PROVIDER_ID,
 	PROVIDER_NAME,
 	fetchModelCatalog,
-	getInferenceBaseUrl,
-	normalizeBaseUrl,
 	type NousProviderModelConfig,
 } from "./models.ts";
-import {
-	applyCatalogToProviderModels,
-	resolveDirectCatalog,
-	transformOAuthCatalogSelection,
-} from "./model-catalog-policy.ts";
+import { applyCatalogToProviderModels } from "./model-catalog-policy.ts";
 import {
 	getNousPortalApiKey,
 	loginNousPortal,
 	refreshNousPortalCredentials,
-	resolveNousPortalCredentialLifecycle,
-	selectNousOAuthCatalogSelection,
 } from "./auth.ts";
-
-type AuthStorageLike = {
-	get?: (provider: string) => unknown;
-	set?: (provider: string, credential: unknown) => void;
-	getApiKey?: (provider: string, options?: { includeFallback?: boolean }) => string | undefined | Promise<string | undefined>;
-};
+import {
+	resolveNousProviderRuntime,
+	resolveOAuthCredentialRegistration,
+	resolveSessionRegistration,
+	resolveStartupRegistration,
+	type AuthStorageLike,
+	type NousProviderRuntime,
+	type ProviderRegistrationOutcome,
+} from "./startup-policy.ts";
 
 type SessionContextLike = {
 	modelRegistry?: {
 		authStorage?: AuthStorageLike;
 	};
 };
-
-async function discoverModels(apiKey: string, inferenceBaseUrl: string) {
-	return resolveDirectCatalog({
-		apiKey,
-		baseUrl: inferenceBaseUrl,
-		timeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
-	});
-}
-
-async function startupModels(baseUrl = getInferenceBaseUrl()) {
-	const apiKey = process.env.NOUS_API_KEY?.trim();
-	if (!apiKey) return [];
-	return discoverModels(apiKey, baseUrl);
-}
 
 function createProviderConfig(
 	baseUrl: string,
@@ -78,82 +58,50 @@ function registerNousPortalProvider(
 	pi.registerProvider(PROVIDER_ID, createProviderConfig(baseUrl, models, login));
 }
 
-
 function isRecord(value: unknown): value is { [key: string]: unknown } {
 	return typeof value === "object" && value !== null;
 }
 
-function isOAuthCredential(value: unknown): value is { [key: string]: unknown; type: "oauth" } {
-	return isRecord(value) && value.type === "oauth";
-}
-
-function registerCredentialModels(
+function applyRegistrationOutcome(
 	pi: ExtensionAPI,
 	login: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>,
-	credentials: { [key: string]: unknown },
+	outcome: ProviderRegistrationOutcome,
 ) {
-	const providerBaseUrl = getInferenceBaseUrl();
-	const selection = selectNousOAuthCatalogSelection(credentials, { baseUrl: providerBaseUrl });
-	registerNousPortalProvider(pi, normalizeBaseUrl(selection.baseUrl, providerBaseUrl), transformOAuthCatalogSelection(selection), login);
-}
-
-async function apiKeyFromAuthStorage(authStorage: AuthStorageLike): Promise<string | undefined> {
-	try {
-		const apiKey = await authStorage.getApiKey?.(PROVIDER_ID, { includeFallback: false });
-		return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-async function refreshCredentialLifecycle(
-	authStorage: AuthStorageLike,
-	credentials: { [key: string]: unknown },
-) {
-	const outcome = await resolveNousPortalCredentialLifecycle(credentials as OAuthCredentials, {
-		refreshModelCatalog: true,
-		modelFetchTimeoutMs: DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
-	});
-	if (outcome.credentialChanged) authStorage.set?.(PROVIDER_ID, outcome.credentials);
-	return outcome;
+	registerNousPortalProvider(pi, outcome.baseUrl, outcome.models, login);
 }
 
 async function registerSessionModels(
 	pi: ExtensionAPI,
 	login: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>,
 	context: SessionContextLike,
+	runtime: NousProviderRuntime,
 ) {
 	const authStorage = context.modelRegistry?.authStorage;
-	if (!authStorage) return;
-
-	const apiKey = await apiKeyFromAuthStorage(authStorage);
-	const storedCredentials = authStorage.get?.(PROVIDER_ID);
-	if (isOAuthCredential(storedCredentials)) {
-		if (!apiKey) {
-			registerCredentialModels(pi, login, storedCredentials);
-			return;
-		}
-		const outcome = await refreshCredentialLifecycle(authStorage, storedCredentials);
-		registerNousPortalProvider(pi, outcome.inferenceBaseUrl, outcome.registrationCatalog, login);
-		return;
-	}
-
-	const baseUrl = getInferenceBaseUrl();
-	const models = apiKey ? await discoverModels(apiKey, baseUrl) : [];
-	registerNousPortalProvider(pi, baseUrl, models, login);
+	const outcome = await resolveSessionRegistration({ authStorage, runtime });
+	if (outcome.kind === "skip") return;
+	if (outcome.credentialsToStore) authStorage?.set?.(PROVIDER_ID, outcome.credentialsToStore);
+	applyRegistrationOutcome(pi, login, outcome);
 }
 
 export default async function nousPortalProvider(pi: ExtensionAPI) {
-	const baseUrl = getInferenceBaseUrl();
+	const runtime = resolveNousProviderRuntime({ env: process.env });
 	const login = async (callbacks: OAuthLoginCallbacks) => {
-		const credentials = await loginNousPortal(callbacks);
-		if (isRecord(credentials)) registerCredentialModels(pi, login, credentials);
+		const credentials = await loginNousPortal(callbacks, {
+			portalBaseUrl: runtime.portalBaseUrl,
+			inferenceBaseUrl: runtime.inferenceBaseUrl,
+			clientId: runtime.clientId,
+			minKeyTtlSeconds: runtime.minKeyTtlSeconds,
+			fetchFn: runtime.fetchFn,
+			now: runtime.now,
+			modelFetchTimeoutMs: runtime.modelDiscoveryTimeoutMs,
+		});
+		if (isRecord(credentials)) applyRegistrationOutcome(pi, login, resolveOAuthCredentialRegistration(credentials, runtime));
 		return credentials;
 	};
 
-	registerNousPortalProvider(pi, baseUrl, await startupModels(baseUrl), login);
+	applyRegistrationOutcome(pi, login, await resolveStartupRegistration(runtime));
 	pi.on("session_start", async (_event, context) => {
-		await registerSessionModels(pi, login, context as SessionContextLike);
+		await registerSessionModels(pi, login, context as SessionContextLike, runtime);
 	});
 }
 
