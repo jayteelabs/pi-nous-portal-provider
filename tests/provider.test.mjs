@@ -67,7 +67,7 @@ test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and bla
 		assert.equal(id, PROVIDER_ID);
 		assert.equal(config.name, PROVIDER_NAME);
 		assert.equal(config.baseUrl, "https://inference-api.nousresearch.com/v1");
-		assert.equal(config.apiKey, "NOUS_API_KEY");
+		assert.equal(config.apiKey, "$NOUS_API_KEY");
 		assert.equal(config.api, "openai-completions");
 		assert.deepEqual(config.models, []);
 		assert.equal(config.oauth.name, PROVIDER_NAME);
@@ -354,6 +354,7 @@ test("startup model discovery uses NOUS_API_KEY and live /models when available"
 					["live-a", "live-b"],
 				);
 				assert.equal(config.baseUrl, "https://inference.example/v1");
+				assert.equal(config.apiKey, "$NOUS_API_KEY");
 				assert.equal(calls[0].input, "https://inference.example/v1/models");
 				assert.equal(calls[0].init.headers.Authorization, "Bearer sk-nous");
 			},

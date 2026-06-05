@@ -36,7 +36,7 @@ function createProviderConfig(
 	return {
 		name: PROVIDER_NAME,
 		baseUrl,
-		apiKey: "NOUS_API_KEY",
+		apiKey: "$NOUS_API_KEY",
 		api: "openai-completions" as const,
 		models,
 		oauth: {
