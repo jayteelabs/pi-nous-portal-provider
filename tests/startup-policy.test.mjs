@@ -47,11 +47,12 @@ test("runtime normalizes injected env and blank direct API keys", () => {
 	assert.equal(runtime.minKeyTtlSeconds, 90);
 });
 
-test("startup without a direct API key returns blank registration", async () => {
+test("startup without a direct API key registers fallback models for Pi API-key login discovery", async () => {
 	const outcome = await resolveStartupRegistration(resolveNousProviderRuntime({ env: {} }));
 	assert.equal(outcome.reason, "startup-no-direct-key");
 	assert.equal(outcome.baseUrl, "https://inference-api.nousresearch.com/v1");
-	assert.deepEqual(outcome.models, []);
+	assert.ok(outcome.models.length > 5);
+	assert.equal(outcome.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
 });
 
 test("startup direct API key uses injected fetch for live catalog", async () => {
@@ -99,7 +100,7 @@ test("OAuth credential registration applies stored catalog and credential base U
 	assert.equal(outcome.models[0].baseUrl, "https://credential.example/v1");
 });
 
-test("session policy skips missing auth storage and blanks when no Nous credentials exist", async () => {
+test("session policy skips missing auth storage and returns fallback models when no Nous credentials exist", async () => {
 	const runtime = resolveNousProviderRuntime({ env: {} });
 	assert.deepEqual(await resolveSessionRegistration({ runtime }), { kind: "skip", reason: "missing-auth-storage" });
 
@@ -116,7 +117,8 @@ test("session policy skips missing auth storage and blanks when no Nous credenti
 	});
 	assert.deepEqual(apiKeyCalls, [{ provider: PROVIDER_ID, options: { includeFallback: false } }]);
 	assert.equal(outcome.reason, "session-no-credentials");
-	assert.deepEqual(outcome.models, []);
+	assert.ok(outcome.models.length > 5);
+	assert.equal(outcome.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
 });
 
 test("session stored OAuth without exposed API key uses cached and fallback catalog policy", async () => {

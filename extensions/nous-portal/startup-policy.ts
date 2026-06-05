@@ -1,5 +1,6 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import {
+	buildFallbackModels,
 	DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
 	PROVIDER_ID,
 	getInferenceBaseUrl,
@@ -94,7 +95,12 @@ export function resolveNousProviderRuntime(inputs: NousProviderRuntimeInputs = {
 
 export async function resolveStartupRegistration(runtime: NousProviderRuntime): Promise<ProviderRegistrationOutcome> {
 	if (!runtime.directApiKey) {
-		return { kind: "register", reason: "startup-no-direct-key", baseUrl: runtime.inferenceBaseUrl, models: [] };
+		return {
+			kind: "register",
+			reason: "startup-no-direct-key",
+			baseUrl: runtime.inferenceBaseUrl,
+			models: buildFallbackModels(runtime.inferenceBaseUrl),
+		};
 	}
 
 	return {
@@ -168,6 +174,6 @@ export async function resolveSessionRegistration(input: {
 					fetchFn: runtime.fetchFn,
 					timeoutMs: runtime.modelDiscoveryTimeoutMs,
 				})
-			: [],
+			: buildFallbackModels(runtime.inferenceBaseUrl),
 	};
 }

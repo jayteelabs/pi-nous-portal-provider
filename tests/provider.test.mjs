@@ -58,7 +58,7 @@ async function withEnv(env, fn) {
 	}
 }
 
-test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and blank models without auth", async () => {
+test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and fallback models for login discovery without auth", async () => {
 	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
 		const { pi, registrations } = capturePi();
 		await nousPortalProvider(pi);
@@ -69,7 +69,8 @@ test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and bla
 		assert.equal(config.baseUrl, "https://inference-api.nousresearch.com/v1");
 		assert.equal(config.apiKey, "$NOUS_API_KEY");
 		assert.equal(config.api, "openai-completions");
-		assert.deepEqual(config.models, []);
+		assert.ok(config.models.length > 5);
+		assert.equal(config.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
 		assert.equal(config.oauth.name, PROVIDER_NAME);
 		assert.equal(typeof config.oauth.login, "function");
 		assert.equal(typeof config.oauth.refreshToken, "function");
@@ -119,7 +120,8 @@ test("OAuth login re-registers the provider with the returned model catalog", as
 			async () => {
 				const { pi, registrations } = capturePi();
 				await nousPortalProvider(pi);
-				assert.deepEqual(registrations[0].config.models, []);
+				assert.ok(registrations[0].config.models.length > 5);
+				assert.equal(registrations[0].config.models[0].baseUrl, "https://inference.example/v1");
 
 				const credentials = await registrations[0].config.oauth.login({
 					onAuth: () => {},
@@ -196,7 +198,7 @@ test("session_start refreshes and re-registers OAuth models from auth storage", 
 	}
 });
 
-test("session_start keeps the provider blank when auth storage has no Nous credentials", async () => {
+test("session_start keeps fallback models visible for API-key login when auth storage has no Nous credentials", async () => {
 	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
 		const { pi, registrations, handlers } = capturePi();
 		await nousPortalProvider(pi);
@@ -214,7 +216,8 @@ test("session_start keeps the provider blank when auth storage has no Nous crede
 		);
 
 		assert.equal(registrations.length, 2);
-		assert.deepEqual(registrations[1].config.models, []);
+		assert.ok(registrations[1].config.models.length > 5);
+		assert.equal(registrations[1].config.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
 	});
 });
 

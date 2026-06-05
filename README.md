@@ -23,10 +23,11 @@ For Portal OAuth, run Pi and use:
 ```
 
 Without `NOUS_API_KEY` or stored Portal OAuth credentials, the provider
-registers OAuth support but keeps the Nous model list blank. After an
-interactive `/login nous-portal`, Pi refreshes its model registry and this
-extension re-registers the cached Portal catalog. Interactive sessions also
-refresh the Portal catalog registration on `session_start`.
+registers its static fallback catalog so Pi can discover `nous-portal` in the
+API-key `/login` flow. After an interactive `/login nous-portal`, Pi refreshes
+its model registry and this extension re-registers the cached Portal catalog.
+Interactive sessions also refresh the Portal catalog registration on
+`session_start`.
 
 ## Configuration
 
@@ -40,9 +41,10 @@ refresh the Portal catalog registration on `session_start`.
 
 Nous Portal `/models` is the model allowlist. Matching OpenRouter `/models`
 entries enrich that allowlist with context, pricing, image input, and reasoning
-metadata. The static fallback catalog is only registered after Pi has usable
-Nous credentials and live model discovery is unavailable; unauthenticated,
-expired, or invalid credentials keep the provider model list blank. See
+metadata. The static fallback catalog is registered when live discovery is
+unavailable with usable credentials, and during unauthenticated startup/session
+registration so Pi's API-key login provider discovery can list `nous-portal`.
+Expired or invalid OAuth credentials still keep the provider model list blank. See
 [docs/models.md](docs/models.md).
 
 ## Testing
