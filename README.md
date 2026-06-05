@@ -53,7 +53,9 @@ registration so Pi's API-key login provider discovery can list Nous. Pi filters
 custom OAuth provider IDs out of the API-key picker, so this package uses the
 internal `nous-portal-api-key` provider ID for the direct-key login entry while
 displaying it as `Nous Research Portal`. Expired or invalid OAuth credentials
-still keep the OAuth provider model list blank. See
+still keep the OAuth provider model list blank. When both stored Portal OAuth
+credentials and a direct API key exist, the OAuth catalog takes precedence and
+the direct-key alias is cleared so `/model` shows one Nous model set. See
 [docs/models.md](docs/models.md).
 
 ## Testing

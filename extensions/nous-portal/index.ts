@@ -71,6 +71,10 @@ function registerNousPortalApiKeyProvider(pi: ExtensionAPI, baseUrl: string, mod
 	pi.registerProvider(DIRECT_API_KEY_PROVIDER_ID, createProviderConfig(baseUrl, discoverableModels));
 }
 
+function suppressNousPortalApiKeyProviderModels(pi: ExtensionAPI, baseUrl: string) {
+	pi.registerProvider(DIRECT_API_KEY_PROVIDER_ID, createProviderConfig(baseUrl, []));
+}
+
 function isRecord(value: unknown): value is { [key: string]: unknown } {
 	return typeof value === "object" && value !== null;
 }
@@ -88,6 +92,8 @@ function applyRegistrationOutcome(
 		outcome.reason === "session-direct-key"
 	) {
 		registerNousPortalApiKeyProvider(pi, outcome.baseUrl, outcome.models);
+	} else {
+		suppressNousPortalApiKeyProviderModels(pi, outcome.baseUrl);
 	}
 }
 
