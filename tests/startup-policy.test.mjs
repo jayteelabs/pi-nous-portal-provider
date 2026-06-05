@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PROVIDER_ID } from "../extensions/nous-portal/index.ts";
+import { DIRECT_API_KEY_PROVIDER_ID, PROVIDER_ID } from "../extensions/nous-portal/index.ts";
 import {
 	resolveNousProviderRuntime,
 	resolveOAuthCredentialRegistration,
@@ -115,7 +115,10 @@ test("session policy skips missing auth storage and returns fallback models when
 			get: () => undefined,
 		},
 	});
-	assert.deepEqual(apiKeyCalls, [{ provider: PROVIDER_ID, options: { includeFallback: false } }]);
+	assert.deepEqual(apiKeyCalls, [
+		{ provider: PROVIDER_ID, options: { includeFallback: false } },
+		{ provider: DIRECT_API_KEY_PROVIDER_ID, options: { includeFallback: false } },
+	]);
 	assert.equal(outcome.reason, "session-no-credentials");
 	assert.ok(outcome.models.length > 5);
 	assert.equal(outcome.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");

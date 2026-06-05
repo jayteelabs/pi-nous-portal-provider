@@ -2,6 +2,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import {
 	buildFallbackModels,
 	DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+	DIRECT_API_KEY_PROVIDER_ID,
 	PROVIDER_ID,
 	getInferenceBaseUrl,
 	normalizeBaseUrl,
@@ -70,9 +71,9 @@ function isOAuthCredential(value: unknown): value is { [key: string]: unknown; t
 	return isRecord(value) && value.type === "oauth";
 }
 
-async function apiKeyFromAuthStorage(authStorage: AuthStorageLike): Promise<string | undefined> {
+async function apiKeyFromAuthStorage(authStorage: AuthStorageLike, providerId: string): Promise<string | undefined> {
 	try {
-		const apiKey = await authStorage.getApiKey?.(PROVIDER_ID, { includeFallback: false });
+		const apiKey = await authStorage.getApiKey?.(providerId, { includeFallback: false });
 		return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined;
 	} catch {
 		return undefined;
@@ -139,7 +140,9 @@ export async function resolveSessionRegistration(input: {
 	const { authStorage, runtime } = input;
 	if (!authStorage) return { kind: "skip", reason: "missing-auth-storage" };
 
-	const apiKey = await apiKeyFromAuthStorage(authStorage);
+	const apiKey =
+		(await apiKeyFromAuthStorage(authStorage, PROVIDER_ID)) ??
+		(await apiKeyFromAuthStorage(authStorage, DIRECT_API_KEY_PROVIDER_ID));
 	const storedCredentials = authStorage.get?.(PROVIDER_ID);
 	if (isOAuthCredential(storedCredentials)) {
 		if (!apiKey) {
