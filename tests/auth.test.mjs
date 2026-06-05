@@ -60,6 +60,45 @@ test("default OAuth client id uses Hermes client and honors NOUS_CLIENT_ID overr
 	}
 });
 
+test("device-code login passes Pi device-code callback fields in documented camelCase shape", async () => {
+	const { fetchFn } = createFetchMock([
+		{ body: deviceCodeResponse() },
+		{
+			body: {
+				access_token: "portal-access",
+				refresh_token: "portal-refresh",
+				expires_in: 3600,
+			},
+		},
+		{ body: { api_key: "agent-key", expires_in: 3600 } },
+		{ body: { data: [] } },
+	]);
+	const devicePrompts = [];
+
+	await loginNousPortal(
+		{
+			onAuth: () => {},
+			onPrompt: async () => "",
+			onDeviceCode: (params) => devicePrompts.push(params),
+		},
+		{
+			fetchFn,
+			sleepFn: async () => {},
+			portalBaseUrl: "https://portal.example",
+		},
+	);
+
+	assert.deepEqual(devicePrompts, [
+		{
+			userCode: "USER-CODE",
+			verificationUri: "https://portal.example/verify",
+			intervalSeconds: 1,
+			expiresInSeconds: 600,
+		},
+	]);
+	assert.doesNotMatch(`${devicePrompts[0].verificationUri}\nEnter code: ${devicePrompts[0].userCode}`, /undefined/);
+});
+
 test("device-code login handles pending, slow-down, success, agent-key mint, and model cache", async () => {
 	const now = Date.parse("2026-01-01T00:00:00.000Z");
 	const agentExpiresAt = "2026-01-01T01:00:00.000Z";
@@ -88,12 +127,11 @@ test("device-code login handles pending, slow-down, success, agent-key mint, and
 		{ body: { data: [{ id: "live-model" }] } },
 	]);
 	const sleeps = [];
-	const authUrls = [];
 	const deviceCodes = [];
 
 	const credentials = await loginNousPortal(
 		{
-			onAuth: (info) => authUrls.push(info),
+			onAuth: () => {},
 			onPrompt: async () => "",
 			onDeviceCode: async (device) => deviceCodes.push(device),
 		},
@@ -108,8 +146,8 @@ test("device-code login handles pending, slow-down, success, agent-key mint, and
 	);
 
 	assert.deepEqual(sleeps, [1000, 2000]);
-	assert.equal(authUrls[0].url, "https://portal.example/verify?user_code=USER-CODE");
-	assert.equal(deviceCodes[0].device_code, "device-code");
+	assert.equal(deviceCodes[0].verificationUri, "https://portal.example/verify");
+	assert.equal(deviceCodes[0].userCode, "USER-CODE");
 	assert.equal(credentials.refresh, "portal-refresh");
 	assert.equal(credentials.access, "agent-key");
 	assert.equal(credentials.expires, Date.parse(agentExpiresAt) - KEY_EXPIRY_SKEW_MS);
@@ -142,7 +180,7 @@ test("device-code login marks the model catalog unavailable when discovery fails
 	]);
 
 	const credentials = await loginNousPortal(
-		{ onAuth: () => {}, onPrompt: async () => "" },
+		{ onAuth: () => {}, onPrompt: async () => "", onDeviceCode: () => {} },
 		{
 			fetchFn,
 			sleepFn: async () => {},
@@ -172,7 +210,7 @@ test("device-code login keeps model catalog blank on discovery auth failure", as
 	]);
 
 	const credentials = await loginNousPortal(
-		{ onAuth: () => {}, onPrompt: async () => "" },
+		{ onAuth: () => {}, onPrompt: async () => "", onDeviceCode: () => {} },
 		{
 			fetchFn,
 			sleepFn: async () => {},
@@ -196,7 +234,7 @@ test("device-code login reports denied authorization", async () => {
 
 	await assert.rejects(
 		loginNousPortal(
-			{ onAuth: () => {}, onPrompt: async () => "" },
+			{ onAuth: () => {}, onPrompt: async () => "", onDeviceCode: () => {} },
 			{ fetchFn, sleepFn: async () => {}, portalBaseUrl: "https://portal.example" },
 		),
 		/denied/,
@@ -213,7 +251,7 @@ test("device-code login times out while authorization is pending", async () => {
 
 	await assert.rejects(
 		loginNousPortal(
-			{ onAuth: () => {}, onPrompt: async () => "" },
+			{ onAuth: () => {}, onPrompt: async () => "", onDeviceCode: () => {} },
 			{
 				fetchFn,
 				sleepFn: async (ms) => {
@@ -244,7 +282,7 @@ test("device-code request preserves Portal timeout message and parent abort clea
 
 	await assert.rejects(
 		loginNousPortal(
-			{ onAuth: () => {}, onPrompt: async () => "", signal: parent.signal },
+			{ onAuth: () => {}, onPrompt: async () => "", onDeviceCode: () => {}, signal: parent.signal },
 			{
 				requestTimeoutMs: 1,
 				portalBaseUrl: "https://portal.example",
@@ -267,7 +305,7 @@ test("device-code request keeps text Portal error fallback semantics", async () 
 
 	await assert.rejects(
 		loginNousPortal(
-			{ onAuth: () => {}, onPrompt: async () => "" },
+			{ onAuth: () => {}, onPrompt: async () => "", onDeviceCode: () => {} },
 			{ fetchFn, sleepFn: async () => {}, portalBaseUrl: "https://portal.example" },
 		),
 		/Device code request failed/,

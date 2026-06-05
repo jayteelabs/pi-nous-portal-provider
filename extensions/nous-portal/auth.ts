@@ -532,21 +532,18 @@ function lifecycleOutcome(
 	};
 }
 
-type DeviceCodeCallback = OAuthLoginCallbacks & {
-	onDeviceCode?: (device: DeviceCodeResponse) => void | Promise<void>;
-};
-
 export async function loginNousPortal(
 	callbacks: OAuthLoginCallbacks,
 	options: NousOAuthOptions = {},
 ): Promise<OAuthCredentials> {
 	const config = resolveOptions(options);
 	const device = await requestDeviceCode(config, callbacks.signal);
-	callbacks.onAuth({
-		url: device.verification_uri_complete,
-		instructions: `Open the URL and confirm code ${device.user_code}.`,
+	callbacks.onDeviceCode({
+		userCode: device.user_code,
+		verificationUri: device.verification_uri,
+		intervalSeconds: device.interval,
+		expiresInSeconds: device.expires_in,
 	});
-	await (callbacks as DeviceCodeCallback).onDeviceCode?.(device);
 	const token = await pollForToken(config, device, callbacks.signal);
 	if (!token.refresh_token) throw new Error("Token response missing refresh_token");
 	const mint = await mintAgentKey(config, token.access_token, callbacks.signal);
