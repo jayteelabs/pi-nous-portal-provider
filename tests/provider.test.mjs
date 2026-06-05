@@ -124,6 +124,7 @@ test("OAuth login re-registers the provider with the returned model catalog", as
 				const credentials = await registrations[0].config.oauth.login({
 					onAuth: () => {},
 					onPrompt: async () => "",
+					onDeviceCode: () => {},
 				});
 
 				assert.equal(credentials.modelCatalog[0].id, "live-model");
