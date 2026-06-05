@@ -2,6 +2,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { readTextBody, timedFetch, type FetchLike } from "./provider-requests.ts";
 
 export const PROVIDER_ID = "nous-portal";
+export const DIRECT_API_KEY_PROVIDER_ID = "nous-portal-api-key";
 export const PROVIDER_NAME = "Nous Research Portal";
 export const DEFAULT_INFERENCE_BASE_URL = "https://inference-api.nousresearch.com/v1";
 export const DEFAULT_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";

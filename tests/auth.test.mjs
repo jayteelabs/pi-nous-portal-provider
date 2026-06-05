@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PROVIDER_ID, applyStoredModelCatalog } from "../extensions/nous-portal/models.ts";
+import { DIRECT_API_KEY_PROVIDER_ID, PROVIDER_ID, applyStoredModelCatalog } from "../extensions/nous-portal/models.ts";
 import {
 	DEFAULT_CLIENT_ID,
 	KEY_EXPIRY_SKEW_MS,
@@ -523,6 +523,7 @@ test("modifyModels replaces fallback nous-portal catalog and preserves other pro
 	const models = [
 		{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" },
 		{ provider: "nous-portal", id: "fallback", baseUrl: "https://fallback.example/v1", api: "openai-completions" },
+		{ provider: DIRECT_API_KEY_PROVIDER_ID, id: "direct", baseUrl: "https://direct.example/v1", api: "openai-completions" },
 	];
 	const modified = applyStoredModelCatalog(models, {
 		access: "agent-key",
@@ -554,6 +555,7 @@ test("modifyModels removes nous-portal models when OAuth credentials are missing
 	const models = [
 		{ provider: "openai", id: "gpt", baseUrl: "https://api.openai.com/v1", api: "openai-completions" },
 		{ provider: PROVIDER_ID, id: "fallback", baseUrl: "https://fallback.example/v1", api: "openai-completions" },
+		{ provider: DIRECT_API_KEY_PROVIDER_ID, id: "direct", baseUrl: "https://direct.example/v1", api: "openai-completions" },
 	];
 
 	assert.deepEqual(applyStoredModelCatalog(models, {}), [models[0]]);

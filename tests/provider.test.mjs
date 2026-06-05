@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import nousPortalProvider, { PROVIDER_ID, PROVIDER_NAME } from "../extensions/nous-portal/index.ts";
+import nousPortalProvider, { DIRECT_API_KEY_PROVIDER_ID, PROVIDER_ID, PROVIDER_NAME } from "../extensions/nous-portal/index.ts";
 
 function jsonResponse(payload, init = {}) {
 	return new Response(JSON.stringify(payload), {
@@ -58,23 +58,84 @@ async function withEnv(env, fn) {
 	}
 }
 
-test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and blank models without auth", async () => {
+function getApiKeyLoginProviderOptionsLikePi(registrations) {
+	const oauthProviderIds = new Set(registrations.filter(({ config }) => config.oauth).map(({ id }) => id));
+	const modelProviders = new Set();
+	for (const { id, config } of registrations) {
+		if (config.models?.length > 0) modelProviders.add(id);
+	}
+
+	return [...modelProviders]
+		.filter((providerId) => !oauthProviderIds.has(providerId))
+		.map((providerId) => {
+			const registration = registrations.find(({ id }) => id === providerId);
+			return {
+				id: providerId,
+				name: registration?.config.name ?? registration?.config.oauth?.name ?? providerId,
+				authType: "api_key",
+			};
+		})
+		.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getEffectiveProviderConfigsLikePi(registrations) {
+	const configs = new Map();
+	for (const { id, config } of registrations) configs.set(id, config);
+	return configs;
+}
+
+function getEffectiveNousModelProvidersLikePi(registrations) {
+	return [...getEffectiveProviderConfigsLikePi(registrations).entries()]
+		.filter(([id, config]) => [PROVIDER_ID, DIRECT_API_KEY_PROVIDER_ID].includes(id) && config.models?.length > 0)
+		.map(([id, config]) => ({ id, modelIds: config.models.map((model) => model.id) }))
+		.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function assertSuppressedApiKeyAlias(registration, baseUrl) {
+	assert.equal(registration.id, DIRECT_API_KEY_PROVIDER_ID);
+	assert.equal(registration.config.name, PROVIDER_NAME);
+	assert.equal(registration.config.baseUrl, baseUrl);
+	assert.deepEqual(registration.config.models, []);
+	assert.equal(registration.config.oauth, undefined);
+}
+
+test("provider registration uses nous-portal, NOUS_API_KEY, OAuth hooks, and fallback models for login discovery without auth", async () => {
 	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
 		const { pi, registrations } = capturePi();
 		await nousPortalProvider(pi);
-		assert.equal(registrations.length, 1);
+		assert.equal(registrations.length, 2);
 		const { id, config } = registrations[0];
 		assert.equal(id, PROVIDER_ID);
 		assert.equal(config.name, PROVIDER_NAME);
 		assert.equal(config.baseUrl, "https://inference-api.nousresearch.com/v1");
-		assert.equal(config.apiKey, "NOUS_API_KEY");
+		assert.equal(config.apiKey, "$NOUS_API_KEY");
 		assert.equal(config.api, "openai-completions");
-		assert.deepEqual(config.models, []);
+		assert.ok(config.models.length > 5);
+		assert.equal(config.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
 		assert.equal(config.oauth.name, PROVIDER_NAME);
 		assert.equal(typeof config.oauth.login, "function");
 		assert.equal(typeof config.oauth.refreshToken, "function");
 		assert.equal(typeof config.oauth.getApiKey, "function");
 		assert.equal(typeof config.oauth.modifyModels, "function");
+
+		const { id: apiKeyProviderId, config: apiKeyConfig } = registrations[1];
+		assert.equal(apiKeyProviderId, DIRECT_API_KEY_PROVIDER_ID);
+		assert.equal(apiKeyConfig.name, PROVIDER_NAME);
+		assert.equal(apiKeyConfig.apiKey, "$NOUS_API_KEY");
+		assert.equal(apiKeyConfig.oauth, undefined);
+		assert.ok(apiKeyConfig.models.length > 5);
+	});
+});
+
+test("provider registration includes a Pi-visible API-key login option", async () => {
+	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
+		const { pi, registrations } = capturePi();
+		await nousPortalProvider(pi);
+
+		const apiKeyOptions = getApiKeyLoginProviderOptionsLikePi(registrations);
+		assert.deepEqual(apiKeyOptions.map((option) => option.name), [PROVIDER_NAME]);
+		assert.equal(apiKeyOptions[0].id, DIRECT_API_KEY_PROVIDER_ID);
+		assert.equal(apiKeyOptions[0].authType, "api_key");
 	});
 });
 
@@ -119,7 +180,8 @@ test("OAuth login re-registers the provider with the returned model catalog", as
 			async () => {
 				const { pi, registrations } = capturePi();
 				await nousPortalProvider(pi);
-				assert.deepEqual(registrations[0].config.models, []);
+				assert.ok(registrations[0].config.models.length > 5);
+				assert.equal(registrations[0].config.models[0].baseUrl, "https://inference.example/v1");
 
 				const credentials = await registrations[0].config.oauth.login({
 					onAuth: () => {},
@@ -128,13 +190,16 @@ test("OAuth login re-registers the provider with the returned model catalog", as
 				});
 
 				assert.equal(credentials.modelCatalog[0].id, "live-model");
-				assert.equal(registrations.length, 2);
-				assert.equal(registrations[1].id, PROVIDER_ID);
+				assert.equal(registrations.length, 4);
+				assert.equal(registrations[1].id, DIRECT_API_KEY_PROVIDER_ID);
+				assert.equal(registrations[2].id, PROVIDER_ID);
 				assert.deepEqual(
-					registrations[1].config.models.map((model) => model.id),
+					registrations[2].config.models.map((model) => model.id),
 					["live-model"],
 				);
-				assert.equal(registrations[1].config.baseUrl, "https://inference.example/v1");
+				assert.equal(registrations[2].config.baseUrl, "https://inference.example/v1");
+				assertSuppressedApiKeyAlias(registrations[3], "https://inference.example/v1");
+				assert.deepEqual(getEffectiveNousModelProvidersLikePi(registrations), [{ id: PROVIDER_ID, modelIds: ["live-model"] }]);
 			},
 		);
 	} finally {
@@ -184,19 +249,75 @@ test("session_start refreshes and re-registers OAuth models from auth storage", 
 			assert.deepEqual(apiKeyCalls, [{ provider: PROVIDER_ID, options: { includeFallback: false } }]);
 			assert.equal(credentials.modelCatalog[0].id, "refreshed-model");
 			assert.equal(credentials.modelCatalogUnavailable, false);
-			assert.equal(registrations.length, 2);
+			assert.equal(registrations.length, 4);
+			assert.equal(registrations[2].id, PROVIDER_ID);
 			assert.deepEqual(
-				registrations[1].config.models.map((model) => model.id),
+				registrations[2].config.models.map((model) => model.id),
 				["refreshed-model"],
 			);
-			assert.equal(registrations[1].config.models[0].baseUrl, "https://inference.example/v1");
+			assert.equal(registrations[2].config.models[0].baseUrl, "https://inference.example/v1");
+			assertSuppressedApiKeyAlias(registrations[3], "https://inference.example/v1");
 		});
 	} finally {
 		globalThis.fetch = previousFetch;
 	}
 });
 
-test("session_start keeps the provider blank when auth storage has no Nous credentials", async () => {
+test("session_start prefers stored OAuth models over the direct API-key alias in the effective model list", async () => {
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = async (input) => {
+		if (String(input) === "https://inference.example/v1/models") return jsonResponse({ data: [{ id: "direct-startup-model" }] });
+		return jsonResponse({ data: [] });
+	};
+	try {
+		await withEnv(
+			{
+				NOUS_API_KEY: "sk-nous",
+				NOUS_INFERENCE_BASE_URL: "https://inference.example/v1",
+			},
+			async () => {
+				const { pi, registrations, handlers } = capturePi();
+				await nousPortalProvider(pi);
+
+				const startupProviders = getEffectiveNousModelProvidersLikePi(registrations);
+				assert.equal(startupProviders.length, 2);
+				assert.deepEqual(
+					startupProviders.map((provider) => provider.modelIds),
+					[["direct-startup-model"], ["direct-startup-model"]],
+				);
+
+				await handlers.get("session_start")?.(
+					{ reason: "startup" },
+					{
+						modelRegistry: {
+							authStorage: {
+								getApiKey: () => undefined,
+								get: (provider) =>
+									provider === PROVIDER_ID
+										? {
+												type: "oauth",
+												access: "agent-key",
+												expires: Date.now() + 60_000,
+												inferenceBaseUrl: "https://inference.example/v1",
+												modelCatalog: [storedModel("oauth-cached-model")],
+											}
+										: undefined,
+							},
+						},
+					},
+				);
+
+				assert.deepEqual(getEffectiveNousModelProvidersLikePi(registrations), [
+					{ id: PROVIDER_ID, modelIds: ["oauth-cached-model"] },
+				]);
+			},
+		);
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+});
+
+test("session_start keeps fallback models visible for API-key login when auth storage has no Nous credentials", async () => {
 	await withEnv({ NOUS_API_KEY: undefined, NOUS_INFERENCE_BASE_URL: undefined }, async () => {
 		const { pi, registrations, handlers } = capturePi();
 		await nousPortalProvider(pi);
@@ -213,8 +334,11 @@ test("session_start keeps the provider blank when auth storage has no Nous crede
 			},
 		);
 
-		assert.equal(registrations.length, 2);
-		assert.deepEqual(registrations[1].config.models, []);
+		assert.equal(registrations.length, 4);
+		assert.equal(registrations[2].id, PROVIDER_ID);
+		assert.equal(registrations[3].id, DIRECT_API_KEY_PROVIDER_ID);
+		assert.ok(registrations[3].config.models.length > 5);
+		assert.equal(registrations[3].config.models[0].baseUrl, "https://inference-api.nousresearch.com/v1");
 	});
 });
 
@@ -248,8 +372,11 @@ test("session_start registers fallback models when cached OAuth catalog is unava
 			);
 
 			assert.equal(credentials.modelCatalogUnavailable, true);
-			assert.ok(registrations[1].config.models.length > 5);
-			assert.equal(registrations[1].config.models[0].baseUrl, "https://inference.example/v1");
+			assert.equal(registrations.length, 4);
+			assert.equal(registrations[2].id, PROVIDER_ID);
+			assert.ok(registrations[2].config.models.length > 5);
+			assert.equal(registrations[2].config.models[0].baseUrl, "https://inference.example/v1");
+			assertSuppressedApiKeyAlias(registrations[3], "https://inference.example/v1");
 		});
 	} finally {
 		globalThis.fetch = previousFetch;
@@ -282,10 +409,12 @@ test("session_start applies env inference base URL to legacy stored OAuth fallba
 				},
 			);
 
-			assert.equal(registrations.length, 2);
-			assert.ok(registrations[1].config.models.length > 5);
-			assert.equal(registrations[1].config.baseUrl, "https://env-inference.example/v1");
-			assert.equal(registrations[1].config.models[0].baseUrl, "https://env-inference.example/v1");
+			assert.equal(registrations.length, 4);
+			assert.equal(registrations[2].id, PROVIDER_ID);
+			assert.ok(registrations[2].config.models.length > 5);
+			assert.equal(registrations[2].config.baseUrl, "https://env-inference.example/v1");
+			assert.equal(registrations[2].config.models[0].baseUrl, "https://env-inference.example/v1");
+			assertSuppressedApiKeyAlias(registrations[3], "https://env-inference.example/v1");
 		},
 	);
 });
@@ -324,8 +453,10 @@ test("session_start keeps OAuth models blank on /models auth failure", async () 
 			assert.equal(credentials.modelCatalogAuthFailed, true);
 			assert.equal(credentials.modelCatalogUnavailable, false);
 			assert.deepEqual(credentials.modelCatalog, []);
-			assert.equal(registrations.length, 2);
-			assert.deepEqual(registrations[1].config.models, []);
+			assert.equal(registrations.length, 4);
+			assert.equal(registrations[2].id, PROVIDER_ID);
+			assert.deepEqual(registrations[2].config.models, []);
+			assertSuppressedApiKeyAlias(registrations[3], "https://inference.example/v1");
 		});
 	} finally {
 		globalThis.fetch = previousFetch;
@@ -354,6 +485,7 @@ test("startup model discovery uses NOUS_API_KEY and live /models when available"
 					["live-a", "live-b"],
 				);
 				assert.equal(config.baseUrl, "https://inference.example/v1");
+				assert.equal(config.apiKey, "$NOUS_API_KEY");
 				assert.equal(calls[0].input, "https://inference.example/v1/models");
 				assert.equal(calls[0].init.headers.Authorization, "Bearer sk-nous");
 			},

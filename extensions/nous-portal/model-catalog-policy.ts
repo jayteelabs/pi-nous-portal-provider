@@ -2,6 +2,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import {
 	DEFAULT_INFERENCE_BASE_URL,
 	DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+	DIRECT_API_KEY_PROVIDER_ID,
 	OPENAI_COMPAT,
 	PROVIDER_ID,
 	buildFallbackModels,
@@ -163,7 +164,7 @@ export function applyCatalogToProviderModels(
 	options: StoredCatalogSelectionOptions = {},
 ): Model<Api>[] {
 	const baseUrl = normalizeBaseUrl(credentials.inferenceBaseUrl, DEFAULT_INFERENCE_BASE_URL);
-	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
+	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID && model.provider !== DIRECT_API_KEY_PROVIDER_ID);
 	const credentialModels = selectStoredCredentialCatalog(credentials, options);
 	if (credentialModels.length === 0) return nonNousModels;
 	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];
@@ -174,7 +175,7 @@ export function applyOAuthCatalogSelectionToProviderModels(
 	selection: NousOAuthCatalogSelection,
 ): Model<Api>[] {
 	const baseUrl = normalizeBaseUrl(selection.baseUrl, DEFAULT_INFERENCE_BASE_URL);
-	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID);
+	const nonNousModels = models.filter((model) => model.provider !== PROVIDER_ID && model.provider !== DIRECT_API_KEY_PROVIDER_ID);
 	const credentialModels = transformOAuthCatalogSelection(selection);
 	if (credentialModels.length === 0) return nonNousModels;
 	return [...nonNousModels, ...toProviderModels(credentialModels, baseUrl)];

@@ -1,8 +1,10 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
 import {
+	DIRECT_API_KEY_PROVIDER_ID,
 	PROVIDER_ID,
 	PROVIDER_NAME,
+	buildFallbackModels,
 	fetchModelCatalog,
 	type NousProviderModelConfig,
 } from "./models.ts";
@@ -31,14 +33,20 @@ type SessionContextLike = {
 function createProviderConfig(
 	baseUrl: string,
 	models: NousProviderModelConfig[],
-	login: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>,
+	login?: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>,
 ) {
-	return {
+	const config = {
 		name: PROVIDER_NAME,
 		baseUrl,
-		apiKey: "NOUS_API_KEY",
+		apiKey: "$NOUS_API_KEY",
 		api: "openai-completions" as const,
 		models,
+	};
+
+	if (!login) return config;
+
+	return {
+		...config,
 		oauth: {
 			name: PROVIDER_NAME,
 			login,
@@ -58,6 +66,15 @@ function registerNousPortalProvider(
 	pi.registerProvider(PROVIDER_ID, createProviderConfig(baseUrl, models, login));
 }
 
+function registerNousPortalApiKeyProvider(pi: ExtensionAPI, baseUrl: string, models: NousProviderModelConfig[]) {
+	const discoverableModels = models.length > 0 ? models : buildFallbackModels(baseUrl);
+	pi.registerProvider(DIRECT_API_KEY_PROVIDER_ID, createProviderConfig(baseUrl, discoverableModels));
+}
+
+function suppressNousPortalApiKeyProviderModels(pi: ExtensionAPI, baseUrl: string) {
+	pi.registerProvider(DIRECT_API_KEY_PROVIDER_ID, createProviderConfig(baseUrl, []));
+}
+
 function isRecord(value: unknown): value is { [key: string]: unknown } {
 	return typeof value === "object" && value !== null;
 }
@@ -68,6 +85,16 @@ function applyRegistrationOutcome(
 	outcome: ProviderRegistrationOutcome,
 ) {
 	registerNousPortalProvider(pi, outcome.baseUrl, outcome.models, login);
+	if (
+		outcome.reason === "startup-no-direct-key" ||
+		outcome.reason === "startup-direct-key" ||
+		outcome.reason === "session-no-credentials" ||
+		outcome.reason === "session-direct-key"
+	) {
+		registerNousPortalApiKeyProvider(pi, outcome.baseUrl, outcome.models);
+	} else {
+		suppressNousPortalApiKeyProviderModels(pi, outcome.baseUrl);
+	}
 }
 
 async function registerSessionModels(
@@ -108,6 +135,7 @@ export default async function nousPortalProvider(pi: ExtensionAPI) {
 export {
 	PROVIDER_ID,
 	PROVIDER_NAME,
+	DIRECT_API_KEY_PROVIDER_ID,
 	applyCatalogToProviderModels as modifyNousPortalModels,
 	fetchModelCatalog,
 	loginNousPortal,
