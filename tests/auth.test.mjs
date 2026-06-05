@@ -62,7 +62,12 @@ test("default OAuth client id uses Hermes client and honors NOUS_CLIENT_ID overr
 
 test("device-code login passes Pi device-code callback fields in documented camelCase shape", async () => {
 	const { fetchFn } = createFetchMock([
-		{ body: deviceCodeResponse() },
+		{
+			body: deviceCodeResponse({
+				verification_uri: "https://portal.example/manage-subscription",
+				verification_uri_complete: "https://portal.example/manage-subscription?user_code=USER-CODE",
+			}),
+		},
 		{
 			body: {
 				access_token: "portal-access",
@@ -91,7 +96,7 @@ test("device-code login passes Pi device-code callback fields in documented came
 	assert.deepEqual(devicePrompts, [
 		{
 			userCode: "USER-CODE",
-			verificationUri: "https://portal.example/verify",
+			verificationUri: "https://portal.example/manage-subscription?user_code=USER-CODE",
 			intervalSeconds: 1,
 			expiresInSeconds: 600,
 		},
@@ -146,7 +151,7 @@ test("device-code login handles pending, slow-down, success, agent-key mint, and
 	);
 
 	assert.deepEqual(sleeps, [1000, 2000]);
-	assert.equal(deviceCodes[0].verificationUri, "https://portal.example/verify");
+	assert.equal(deviceCodes[0].verificationUri, "https://portal.example/verify?user_code=USER-CODE");
 	assert.equal(deviceCodes[0].userCode, "USER-CODE");
 	assert.equal(credentials.refresh, "portal-refresh");
 	assert.equal(credentials.access, "agent-key");

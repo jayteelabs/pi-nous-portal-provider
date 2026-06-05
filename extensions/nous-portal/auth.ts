@@ -540,7 +540,7 @@ export async function loginNousPortal(
 	const device = await requestDeviceCode(config, callbacks.signal);
 	callbacks.onDeviceCode({
 		userCode: device.user_code,
-		verificationUri: device.verification_uri,
+		verificationUri: device.verification_uri_complete,
 		intervalSeconds: device.interval,
 		expiresInSeconds: device.expires_in,
 	});
