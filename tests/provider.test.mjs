@@ -160,13 +160,6 @@ test("OAuth login re-registers the provider with the returned model catalog", as
 				expires_in: 3600,
 			});
 		}
-		if (url.endsWith("/api/oauth/agent-key")) {
-			return jsonResponse({
-				api_key: "agent-key",
-				expires_in: 3600,
-				inference_base_url: "https://inference.example/v1",
-			});
-		}
 		if (url === "https://inference.example/v1/models") return jsonResponse({ data: [{ id: "live-model" }] });
 		return jsonResponse({ data: [] });
 	};

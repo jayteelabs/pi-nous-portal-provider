@@ -20,7 +20,7 @@ import {
 
 export const DEFAULT_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const DEFAULT_CLIENT_ID = "hermes-cli";
-export const DEFAULT_SCOPE = "inference:mint_agent_key";
+export const DEFAULT_SCOPE = "inference:invoke";
 export const DEFAULT_MIN_KEY_TTL_SECONDS = 1800;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 export const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
@@ -99,7 +99,7 @@ export type NousOAuthLifecycleTransition =
 	| "usable-agent-key"
 	| "portal-token-refreshed"
 	| "agent-key-minted"
-	| "invalid-portal-token-retried";
+	| "invalid-portal-token-retried";;
 
 export type NousOAuthCatalogStatus = "refreshed" | "unavailable" | "auth-failed-blank" | "unchanged";
 
@@ -359,36 +359,11 @@ async function refreshPortalToken(
 	return validateTokenResponse(await parseJsonOrTextResponse(response));
 }
 
-async function mintAgentKey(
-	config: RuntimeConfig,
-	portalAccessToken: string,
-	signal?: AbortSignal,
-): Promise<AgentKeyResponse> {
-	const response = await request(
-		config,
-		`${config.portalBaseUrl}/api/oauth/agent-key`,
-		{
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				Authorization: `Bearer ${portalAccessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ min_ttl_seconds: config.minKeyTtlSeconds }),
-		},
-		signal,
-	);
-	if (!response.ok) throw await responseError(response, "Agent key mint request failed");
-	const data = asRecord(await parseJsonOrTextResponse(response));
-	const apiKey = asString(data.api_key);
-	if (!apiKey) throw new Error("Agent key mint response missing api_key");
+function invokeJwtAsAgentKey(config: RuntimeConfig, token: TokenResponse): AgentKeyResponse {
 	return {
-		api_key: apiKey,
-		key_id: asString(data.key_id),
-		expires_at: asString(data.expires_at),
-		expires_in: asNumber(data.expires_in),
-		reused: Boolean(data.reused),
-		inference_base_url: asString(data.inference_base_url),
+		api_key: token.access_token,
+		expires_in: token.expires_in,
+		inference_base_url: token.inference_base_url,
 	};
 }
 
@@ -546,7 +521,7 @@ export async function loginNousPortal(
 	});
 	const token = await pollForToken(config, device, callbacks.signal);
 	if (!token.refresh_token) throw new Error("Token response missing refresh_token");
-	const mint = await mintAgentKey(config, token.access_token, callbacks.signal);
+	const mint = invokeJwtAsAgentKey(config, token);
 	const inferenceBaseUrl = normalizeBaseUrl(mint.inference_base_url ?? token.inference_base_url, config.inferenceBaseUrl);
 	const catalog = await refreshModelCatalog(mint.api_key, inferenceBaseUrl, config, callbacks.signal);
 	return createCredentials(config, token, mint, catalog);
@@ -625,7 +600,6 @@ export async function resolveNousPortalCredentialLifecycle(
 	});
 
 	let updated = credentials as NousOAuthCredentials;
-	let didRefreshPortal = false;
 	let transition: NousOAuthLifecycleTransition = "usable-agent-key";
 	let credentialChanged = false;
 	if (config.refreshModelCatalog && !config.forceMint && !config.forcePortalRefresh && isAgentKeyUsable(updated, config)) {
@@ -641,7 +615,6 @@ export async function resolveNousPortalCredentialLifecycle(
 	if (needsPortalRefresh(updated, config)) {
 		const refreshed = await refreshPortalToken(config, updated.refresh);
 		updated = mergeTokenIntoCredentials(updated, config, refreshed);
-		didRefreshPortal = true;
 		credentialChanged = true;
 		transition = "portal-token-refreshed";
 		config = resolveOptions({
@@ -663,28 +636,21 @@ export async function resolveNousPortalCredentialLifecycle(
 		return lifecycleOutcome(updated, config, transition, catalog, credentialChanged);
 	}
 
-	let mint: AgentKeyResponse;
-	try {
-		mint = await mintAgentKey(config, updated.portalAccess ?? "", undefined);
-	} catch (error) {
-		const code = error instanceof PortalHttpError ? error.code : undefined;
-		if ((code === "invalid_token" || code === "invalid_grant") && !didRefreshPortal) {
-			const refreshed = await refreshPortalToken(config, updated.refresh);
-			updated = mergeTokenIntoCredentials(updated, config, refreshed);
-			credentialChanged = true;
-			transition = "invalid-portal-token-retried";
-			config = resolveOptions({
-				...options,
-				portalBaseUrl: updated.portalBaseUrl,
-				inferenceBaseUrl: updated.inferenceBaseUrl,
-				clientId: updated.clientId,
-				scope: updated.scope,
-			});
-			mint = await mintAgentKey(config, updated.portalAccess ?? "", undefined);
-		} else {
-			throw error;
-		}
+	if (!updated.portalAccess) {
+		throw new Error("Nous Portal access token missing; sign in again.");
 	}
+	const mint = invokeJwtAsAgentKey(config, {
+		access_token: updated.portalAccess,
+		refresh_token: updated.refresh || undefined,
+		expires_in:
+			Number.isFinite(updated.portalAccessExpires) && updated.portalAccessExpires > config.now()
+				? Math.max(
+						1,
+						Math.round((updated.portalAccessExpires - config.now()) / 1000) +
+							Math.round(TOKEN_EXPIRY_SKEW_MS / 1000),
+					)
+				: undefined,
+	});
 	if (transition !== "invalid-portal-token-retried") transition = "agent-key-minted";
 
 	const inferenceBaseUrl = normalizeBaseUrl(mint.inference_base_url ?? updated.inferenceBaseUrl, config.inferenceBaseUrl);

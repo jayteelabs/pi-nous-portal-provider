@@ -192,9 +192,6 @@ test("session OAuth lifecycle refresh preserves stored credential portal client 
 			if (String(input) === "https://credential-portal.example/api/oauth/token") {
 				return jsonResponse({ access_token: "portal-access", expires_in: 3600, inference_base_url: "https://credential-inference.example/v1" });
 			}
-			if (String(input) === "https://credential-portal.example/api/oauth/agent-key") {
-				return jsonResponse({ api_key: "refreshed-agent-key", expires_in: 3600, inference_base_url: "https://credential-inference.example/v1" });
-			}
 			if (String(input) === "https://credential-inference.example/v1/models") {
 				return jsonResponse({ data: [{ id: "credential-boundary-model" }] });
 			}
@@ -225,8 +222,8 @@ test("session OAuth lifecycle refresh preserves stored credential portal client 
 	assert.equal(calls[0].input, "https://credential-portal.example/api/oauth/token");
 	assert.match(calls[0].body, /client_id=credential-client/);
 	assert.doesNotMatch(calls[0].body, /runtime-client/);
-	assert.equal(calls[1].input, "https://credential-portal.example/api/oauth/agent-key");
-	assert.equal(calls[2].input, "https://credential-inference.example/v1/models");
+	assert.equal(calls[1].input, "https://credential-inference.example/v1/models");
+	assert.ok(calls.every((call) => !call.input.includes("/api/oauth/agent-key")));
 	assert.equal(outcome.credentialsToStore.portalBaseUrl, "https://credential-portal.example");
 	assert.equal(outcome.credentialsToStore.clientId, "credential-client");
 	assert.equal(outcome.credentialsToStore.inferenceBaseUrl, "https://credential-inference.example/v1");
